@@ -131,15 +131,21 @@ measure_phase() {
     local start_ns end_ns wall_seconds exit_code status
     local user_seconds system_seconds cpu_percent peak_rss fs_inputs fs_outputs
     local minor_faults major_faults voluntary_context involuntary_context
-    local timed_pid sampler_pid="" sample_stats peak_cpu average_rss resource_samples peak_swap
+    local timed_pid log_tail_pid sampler_pid="" sample_stats peak_cpu average_rss resource_samples peak_swap
     local sample_log="$LOG_DIR/${phase}.samples"
     local swap_log="$LOG_DIR/${phase}.swap-samples.csv"
 
     echo "===== $phase ====="
     start_ns="$(date +%s%N)"
     set +e
-    /usr/bin/time -v -o "$time_log" -- "$@" > >(tee "$phase_log") 2>&1 &
+    : > "$phase_log"
+    /usr/bin/time -v -o "$time_log" -- "$@" > "$phase_log" 2>&1 &
     timed_pid=$!
+    # Stream the file independently. A process substitution here would make
+    # `tee` a child of the timed shell and could be mistaken for the FHE
+    # workload by the resource sampler.
+    tail --pid="$timed_pid" -n +1 -f "$phase_log" &
+    log_tail_pid=$!
     if [[ "$phase" == "key_generation" || "$phase" == "inference" ]]; then
         start_resource_sampler "$timed_pid" "$sample_log" "$swap_log"
         sampler_pid="$RESOURCE_SAMPLER_PID"
@@ -147,6 +153,7 @@ measure_phase() {
     wait "$timed_pid"
     exit_code=$?
     end_ns="$(date +%s%N)"
+    wait "$log_tail_pid" 2>/dev/null || true
     if [[ -n "$sampler_pid" ]]; then
         wait "$sampler_pid" 2>/dev/null || true
     fi
