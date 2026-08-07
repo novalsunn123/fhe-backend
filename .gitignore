@@ -22,3 +22,6 @@
 *.lock
 core
 core.*
+
+# Ghi chú tạm dùng làm nội dung PR/lịch sử phiên bản dev
+/.agent-change-note.md

@@ -35,10 +35,12 @@ SERVER_RESULT="$SERVER_RESULTS/ci-encrypted-result.bin"
 CLIENT_RESULT="$CLIENT_CIPHERTEXTS/ci-encrypted-result.bin"
 METRICS_CSV="$REPORT_DIR/metrics.csv"
 SUMMARY_MD="$REPORT_DIR/summary.md"
+BENCHMARK_JSON="$REPORT_DIR/benchmark.json"
 LOG_DIR="$REPORT_DIR/logs"
+RESOURCE_SAMPLE_INTERVAL="${CICD_RESOURCE_SAMPLE_INTERVAL:-1}"
 
 mkdir -p "$LOG_DIR"
-printf 'phase,status,exit_code,wall_seconds,user_seconds,system_seconds,cpu_percent,peak_rss_kb,fs_inputs,fs_outputs,minor_faults,major_faults,voluntary_context_switches,involuntary_context_switches\n' > "$METRICS_CSV"
+printf 'phase,status,exit_code,wall_seconds,user_seconds,system_seconds,average_cpu_percent,peak_cpu_percent,average_rss_kb,peak_rss_kb,resource_samples,peak_swap_kb,fs_inputs,fs_outputs,minor_faults,major_faults,voluntary_context_switches,involuntary_context_switches\n' > "$METRICS_CSV"
 
 PIPELINE_START_NS="$(date +%s%N)"
 OVERALL_STATUS="failed"
@@ -62,6 +64,65 @@ metric_value() {
     ' "$file"
 }
 
+start_resource_sampler() {
+    local timed_pid="$1"
+    local sample_log="$2"
+    local swap_log="$3"
+    : > "$sample_log"
+    : > "$swap_log"
+
+    (
+        local workload_pid=""
+        local attempt pidstat_pid swap_kb
+        for attempt in $(seq 1 50); do
+            workload_pid="$(pgrep -P "$timed_pid" | head -1 || true)"
+            if [[ -n "$workload_pid" ]]; then
+                break
+            fi
+            if ! kill -0 "$timed_pid" 2>/dev/null; then
+                exit 0
+            fi
+            sleep 0.1
+        done
+        if [[ -z "$workload_pid" ]]; then
+            exit 0
+        fi
+        pidstat -h -u -r -p "$workload_pid" "$RESOURCE_SAMPLE_INTERVAL" > "$sample_log" 2>&1 &
+        pidstat_pid=$!
+        while kill -0 "$workload_pid" 2>/dev/null; do
+            swap_kb="$(awk '/^VmSwap:/ {print $2; found=1} END {if (!found) print 0}' "/proc/$workload_pid/status" 2>/dev/null || printf '0')"
+            printf '%s,%s\n' "$(date +%s)" "${swap_kb:-0}" >> "$swap_log"
+            sleep "$RESOURCE_SAMPLE_INTERVAL"
+        done
+        wait "$pidstat_pid" 2>/dev/null || true
+    ) &
+    RESOURCE_SAMPLER_PID=$!
+}
+
+resource_sample_stats() {
+    local sample_log="$1"
+    awk '
+        $3 ~ /^[0-9]+$/ && $8 ~ /^[0-9.]+$/ && $13 ~ /^[0-9]+$/ {
+            cpu_sum += $8
+            rss_sum += $13
+            if ($8 > cpu_peak) cpu_peak = $8
+            samples++
+        }
+        END {
+            if (samples > 0) {
+                printf "%.2f,%.0f,%d", cpu_peak, rss_sum / samples, samples
+            } else {
+                printf "0,0,0"
+            }
+        }
+    ' "$sample_log"
+}
+
+peak_swap_kb() {
+    local swap_log="$1"
+    awk -F, 'BEGIN {peak=0} $2 ~ /^[0-9]+$/ && $2 > peak {peak=$2} END {print peak}' "$swap_log"
+}
+
 measure_phase() {
     local phase="$1"
     shift
@@ -70,14 +131,26 @@ measure_phase() {
     local start_ns end_ns wall_seconds exit_code status
     local user_seconds system_seconds cpu_percent peak_rss fs_inputs fs_outputs
     local minor_faults major_faults voluntary_context involuntary_context
+    local timed_pid sampler_pid="" sample_stats peak_cpu average_rss resource_samples peak_swap
+    local sample_log="$LOG_DIR/${phase}.samples"
+    local swap_log="$LOG_DIR/${phase}.swap-samples.csv"
 
     echo "===== $phase ====="
     start_ns="$(date +%s%N)"
     set +e
-    /usr/bin/time -v -o "$time_log" -- "$@" > >(tee "$phase_log") 2>&1
+    /usr/bin/time -v -o "$time_log" -- "$@" > >(tee "$phase_log") 2>&1 &
+    timed_pid=$!
+    if [[ "$phase" == "key_generation" || "$phase" == "inference" ]]; then
+        start_resource_sampler "$timed_pid" "$sample_log" "$swap_log"
+        sampler_pid="$RESOURCE_SAMPLER_PID"
+    fi
+    wait "$timed_pid"
     exit_code=$?
-    set -e
     end_ns="$(date +%s%N)"
+    if [[ -n "$sampler_pid" ]]; then
+        wait "$sampler_pid" 2>/dev/null || true
+    fi
+    set -e
     wall_seconds="$(awk -v start="$start_ns" -v end="$end_ns" 'BEGIN {printf "%.3f", (end-start)/1000000000}')"
 
     if (( exit_code == 0 )); then
@@ -97,11 +170,16 @@ measure_phase() {
     major_faults="$(metric_value "$time_log" "Major (requiring I/O) page faults" || true)"
     voluntary_context="$(metric_value "$time_log" "Voluntary context switches" || true)"
     involuntary_context="$(metric_value "$time_log" "Involuntary context switches" || true)"
+    sample_stats="$(resource_sample_stats "$sample_log" 2>/dev/null || printf '0,0,0')"
+    IFS=, read -r peak_cpu average_rss resource_samples <<< "$sample_stats"
+    peak_swap="$(peak_swap_kb "$swap_log" 2>/dev/null || printf '0')"
 
-    printf '%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    printf '%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
         "$phase" "$status" "$exit_code" "$wall_seconds" \
         "${user_seconds:-0}" "${system_seconds:-0}" "${cpu_percent:-0%}" \
-        "${peak_rss:-0}" "${fs_inputs:-0}" "${fs_outputs:-0}" \
+        "${peak_cpu:-0}" "${average_rss:-0}" "${peak_rss:-0}" \
+        "${resource_samples:-0}" "${peak_swap:-0}" \
+        "${fs_inputs:-0}" "${fs_outputs:-0}" \
         "${minor_faults:-0}" "${major_faults:-0}" \
         "${voluntary_context:-0}" "${involuntary_context:-0}" >> "$METRICS_CSV"
 
@@ -125,6 +203,101 @@ directory_size_or_zero() {
     fi
 }
 
+phase_metric() {
+    local phase="$1"
+    local column="$2"
+    awk -F, -v phase="$phase" -v column="$column" '$1 == phase {print $column; exit}' "$METRICS_CSV"
+}
+
+format_seconds() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        printf 'unavailable'
+        return
+    fi
+    awk -v seconds="$value" 'BEGIN {
+        if (seconds >= 60) {
+            printf "%dm %.3fs", int(seconds / 60), seconds - int(seconds / 60) * 60
+        } else {
+            printf "%.3fs", seconds
+        }
+    }'
+}
+
+format_cpu() {
+    local value="${1:-}"
+    value="${value%%%}"
+    if [[ -z "$value" || "$value" == "0" ]]; then
+        printf 'unavailable'
+        return
+    fi
+    awk -v cpu="$value" 'BEGIN {printf "%.2f%% (~%.2f cores)", cpu, cpu / 100}'
+}
+
+format_kib() {
+    local value="${1:-0}"
+    if [[ -z "$value" || "$value" == "0" ]]; then
+        printf 'unavailable'
+        return
+    fi
+    awk -v kib="$value" 'BEGIN {
+        if (kib >= 1048576) printf "%.2f GiB", kib / 1048576
+        else printf "%.2f MiB", kib / 1024
+    }'
+}
+
+format_swap_kib() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        printf 'unavailable'
+    elif [[ "$value" == "0" ]]; then
+        printf '0 KiB'
+    else
+        format_kib "$value"
+    fi
+}
+
+format_circuit_time() {
+    local value="${1:-}"
+    if [[ "$value" =~ ^([0-9]+)\.([0-9]+):([0-9]+)$ ]]; then
+        printf '%sm %02d.%03ds' \
+            "${BASH_REMATCH[1]}" "$((10#${BASH_REMATCH[2]}))" "$((10#${BASH_REMATCH[3]}))"
+    elif [[ "$value" =~ ^([0-9]+):([0-9]+)s?$ ]]; then
+        printf '%d.%03ds' "$((10#${BASH_REMATCH[1]}))" "$((10#${BASH_REMATCH[2]}))"
+    else
+        printf 'unavailable'
+    fi
+}
+
+circuit_seconds() {
+    local value="${1:-}"
+    if [[ "$value" =~ ^([0-9]+)\.([0-9]+):([0-9]+)$ ]]; then
+        awk -v minutes="${BASH_REMATCH[1]}" -v seconds="${BASH_REMATCH[2]}" \
+            -v milliseconds="${BASH_REMATCH[3]}" \
+            'BEGIN {printf "%.3f", minutes * 60 + seconds + milliseconds / 1000}'
+    elif [[ "$value" =~ ^([0-9]+):([0-9]+)s?$ ]]; then
+        awk -v seconds="${BASH_REMATCH[1]}" -v milliseconds="${BASH_REMATCH[2]}" \
+            'BEGIN {printf "%.3f", seconds + milliseconds / 1000}'
+    else
+        printf '0'
+    fi
+}
+
+number_or_zero() {
+    local value="${1:-0}"
+    value="${value%%%}"
+    if [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s' "$value"
+    else
+        printf '0'
+    fi
+}
+
+sum_numbers() {
+    awk -v first="$(number_or_zero "${1:-0}")" -v second="$(number_or_zero "${2:-0}")" \
+        'BEGIN {printf "%.3f", first + second}'
+}
+
 render_summary() {
     local exit_code="$1"
     local pipeline_end_ns total_seconds commit_subject commit_sha commit_branch commit_actor
@@ -132,13 +305,19 @@ render_summary() {
     local input_bytes result_bytes circuit_time layer1_time layer2_time layer3_time
     local cpu_model logical_cpus memory_total_kb memory_available_kb swap_total_kb
     local disk_available_kb openfhe_version compiler_version cmake_version
+    local keygen_wall keygen_avg_cpu keygen_peak_cpu keygen_avg_rss keygen_peak_rss
+    local inference_wall inference_avg_cpu inference_peak_cpu inference_avg_rss inference_peak_rss
+    local encryption_wall decryption_wall
+    local keygen_user keygen_system keygen_cpu_time keygen_peak_swap
+    local inference_user inference_system inference_cpu_time inference_peak_swap
+    local test_image_sha weights_manifest_sha
 
     pipeline_end_ns="$(date +%s%N)"
     total_seconds="$(awk -v start="$PIPELINE_START_NS" -v end="$pipeline_end_ns" 'BEGIN {printf "%.3f", (end-start)/1000000000}')"
     commit_subject="$(git -C "$REPO_ROOT" log -1 --pretty=%s 2>/dev/null || printf 'unknown')"
     commit_subject="${commit_subject//|/\\|}"
-    commit_sha="${GITHUB_SHA:-unknown}"
-    commit_branch="${GITHUB_REF_NAME:-unknown}"
+    commit_sha="${FHE_BENCHMARK_COMMIT:-${GITHUB_SHA:-unknown}}"
+    commit_branch="${FHE_BENCHMARK_BRANCH:-${GITHUB_REF_NAME:-unknown}}"
     commit_actor="${GITHUB_ACTOR:-unknown}"
 
     handgun_logit="$(awk -F': ' '/^Handgun:/ {print $2; exit}' "$LOG_DIR/decryption.log" 2>/dev/null || true)"
@@ -151,7 +330,27 @@ render_summary() {
     layer1_time="$(sed -n 's/.*(Layer 1 took:):[^0-9]*\([^[:space:]]*\).*/\1/p' "$LOG_DIR/inference.log" 2>/dev/null | tail -1 || true)"
     layer2_time="$(sed -n 's/.*(Layer 2 took:):[^0-9]*\([^[:space:]]*\).*/\1/p' "$LOG_DIR/inference.log" 2>/dev/null | tail -1 || true)"
     layer3_time="$(sed -n 's/.*(Layer 3 took:):[^0-9]*\([^[:space:]]*\).*/\1/p' "$LOG_DIR/inference.log" 2>/dev/null | tail -1 || true)"
-    circuit_time="$(sed -n 's/.*whole circuit took: ):.*\x1b\[[0-9;]*m\([^[:space:]]*\).*/\1/p' "$LOG_DIR/inference.log" 2>/dev/null | tail -1 || true)"
+    circuit_time="$(sed $'s/\033\\[[0-9;]*m//g' "$LOG_DIR/inference.log" 2>/dev/null | sed -n 's/.*whole circuit took: ): *\([^[:space:]]*\).*/\1/p' | tail -1 || true)"
+    keygen_wall="$(phase_metric key_generation 4 || true)"
+    keygen_user="$(phase_metric key_generation 5 || true)"
+    keygen_system="$(phase_metric key_generation 6 || true)"
+    keygen_avg_cpu="$(phase_metric key_generation 7 || true)"
+    keygen_peak_cpu="$(phase_metric key_generation 8 || true)"
+    keygen_avg_rss="$(phase_metric key_generation 9 || true)"
+    keygen_peak_rss="$(phase_metric key_generation 10 || true)"
+    keygen_peak_swap="$(phase_metric key_generation 12 || true)"
+    keygen_cpu_time="$(sum_numbers "$keygen_user" "$keygen_system")"
+    inference_wall="$(phase_metric inference 4 || true)"
+    inference_user="$(phase_metric inference 5 || true)"
+    inference_system="$(phase_metric inference 6 || true)"
+    inference_avg_cpu="$(phase_metric inference 7 || true)"
+    inference_peak_cpu="$(phase_metric inference 8 || true)"
+    inference_avg_rss="$(phase_metric inference 9 || true)"
+    inference_peak_rss="$(phase_metric inference 10 || true)"
+    inference_peak_swap="$(phase_metric inference 12 || true)"
+    inference_cpu_time="$(sum_numbers "$inference_user" "$inference_system")"
+    encryption_wall="$(phase_metric encryption 4 || true)"
+    decryption_wall="$(phase_metric decryption 4 || true)"
     cpu_model="$(awk -F': ' '/^model name[[:space:]]*:/ {print $2; exit}' /proc/cpuinfo)"
     logical_cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 'unknown')"
     memory_total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo)"
@@ -161,9 +360,40 @@ render_summary() {
     openfhe_version="$(sed -n 's/^set(PACKAGE_VERSION "\([^"]*\)").*/\1/p' /usr/local/lib/OpenFHE/OpenFHEConfigVersion.cmake 2>/dev/null | head -1 || true)"
     compiler_version="$(c++ -dumpfullversion -dumpversion 2>/dev/null || printf 'unknown')"
     cmake_version="$(cmake --version 2>/dev/null | awk 'NR==1 {print $3}')"
+    if [[ -f "$REPO_ROOT/$TEST_IMAGE" ]]; then
+        test_image_sha="$(sha256sum "$REPO_ROOT/$TEST_IMAGE" | awk '{print $1}')"
+    else
+        test_image_sha=""
+    fi
+    if [[ -d "$WEIGHTS_DIR" ]]; then
+        weights_manifest_sha="$(cd "$WEIGHTS_DIR" && find . -type f -printf '%P:%s\n' | sort | sha256sum | awk '{print $1}')"
+    else
+        weights_manifest_sha=""
+    fi
 
     {
         echo "# FHE CI benchmark"
+        echo
+        echo "## Key benchmark summary"
+        echo
+        echo "| Important metric | Result |"
+        echo "|---|---:|"
+        echo "| Status | $OVERALL_STATUS |"
+        echo "| Prediction | ${prediction:-unavailable} |"
+        echo "| Total pipeline | $(format_seconds "$total_seconds") |"
+        echo "| Key generation time | $(format_seconds "$keygen_wall") |"
+        echo "| Encryption time | $(format_seconds "$encryption_wall") |"
+        echo "| Inference time | $(format_seconds "$inference_wall") |"
+        echo "| FHE circuit time | $(format_circuit_time "$circuit_time") |"
+        echo "| Layer 1 / Layer 2 / Layer 3 | $(format_circuit_time "$layer1_time") / $(format_circuit_time "$layer2_time") / $(format_circuit_time "$layer3_time") |"
+        echo "| Decryption time | $(format_seconds "$decryption_wall") |"
+        echo "| Key generation CPU average / peak | $(format_cpu "$keygen_avg_cpu") / $(format_cpu "$keygen_peak_cpu") |"
+        echo "| Key generation RAM average / peak | $(format_kib "$keygen_avg_rss") / $(format_kib "$keygen_peak_rss") |"
+        echo "| Inference CPU average / peak | $(format_cpu "$inference_avg_cpu") / $(format_cpu "$inference_peak_cpu") |"
+        echo "| Inference RAM average / peak | $(format_kib "$inference_avg_rss") / $(format_kib "$inference_peak_rss") |"
+        echo "| Inference peak swap | $(format_swap_kib "$inference_peak_swap") |"
+        echo
+        echo "CPU and average RAM samples are collected every ${RESOURCE_SAMPLE_INTERVAL}s for key generation and inference."
         echo
         echo "| Field | Value |"
         echo "|---|---|"
@@ -219,14 +449,109 @@ render_summary() {
         echo
         echo "## Phase resources"
         echo
-        echo "| Phase | Status | Wall (s) | CPU | Peak RSS (KiB) | FS input | FS output |"
-        echo "|---|---|---:|---:|---:|---:|---:|"
-        tail -n +2 "$METRICS_CSV" | while IFS=, read -r phase status _ wall _ _ cpu rss fs_in fs_out _; do
-            echo "| $phase | $status | $wall | $cpu | $rss | $fs_in | $fs_out |"
+        echo "| Phase | Status | Wall (s) | Avg CPU | Peak CPU | Avg RSS (KiB) | Peak RSS (KiB) | Samples | Peak swap (KiB) | FS input | FS output |"
+        echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        tail -n +2 "$METRICS_CSV" | while IFS=, read -r phase status _ wall _ _ avg_cpu peak_cpu avg_rss peak_rss samples peak_swap fs_in fs_out _; do
+            if [[ "$samples" == "0" ]]; then
+                peak_cpu="unavailable"
+                avg_rss="unavailable"
+            else
+                peak_cpu="${peak_cpu}%"
+            fi
+            echo "| $phase | $status | $wall | $avg_cpu | $peak_cpu | $avg_rss | $peak_rss | $samples | $peak_swap | $fs_in | $fs_out |"
         done
         echo
         echo "Detailed metrics and logs are attached as the GitHub Actions artifact for this run."
     } > "$SUMMARY_MD"
+
+    jq -n \
+        --arg status "$OVERALL_STATUS" \
+        --arg commit "$commit_sha" \
+        --arg branch "$commit_branch" \
+        --arg commit_subject "$commit_subject" \
+        --arg experiment "$EXPERIMENT" \
+        --arg test_image "$TEST_IMAGE" \
+        --arg test_image_sha256 "$test_image_sha" \
+        --arg weights_manifest_sha256 "$weights_manifest_sha" \
+        --arg cpu_model "$cpu_model" \
+        --arg openfhe_version "$openfhe_version" \
+        --arg prediction "$prediction" \
+        --argjson logical_cpus "$(number_or_zero "$logical_cpus")" \
+        --argjson total_ram_kb "$(number_or_zero "$memory_total_kb")" \
+        --argjson pipeline_wall_seconds "$(number_or_zero "$total_seconds")" \
+        --argjson handgun_logit "$(number_or_zero "$handgun_logit")" \
+        --argjson knife_logit "$(number_or_zero "$knife_logit")" \
+        --argjson keygen_wall "$(number_or_zero "$keygen_wall")" \
+        --argjson keygen_cpu_time "$(number_or_zero "$keygen_cpu_time")" \
+        --argjson keygen_avg_cpu "$(number_or_zero "$keygen_avg_cpu")" \
+        --argjson keygen_peak_cpu "$(number_or_zero "$keygen_peak_cpu")" \
+        --argjson keygen_avg_rss "$(number_or_zero "$keygen_avg_rss")" \
+        --argjson keygen_peak_rss "$(number_or_zero "$keygen_peak_rss")" \
+        --argjson keygen_peak_swap "$(number_or_zero "$keygen_peak_swap")" \
+        --argjson encryption_wall "$(number_or_zero "$encryption_wall")" \
+        --argjson inference_wall "$(number_or_zero "$inference_wall")" \
+        --argjson inference_cpu_time "$(number_or_zero "$inference_cpu_time")" \
+        --argjson inference_avg_cpu "$(number_or_zero "$inference_avg_cpu")" \
+        --argjson inference_peak_cpu "$(number_or_zero "$inference_peak_cpu")" \
+        --argjson inference_avg_rss "$(number_or_zero "$inference_avg_rss")" \
+        --argjson inference_peak_rss "$(number_or_zero "$inference_peak_rss")" \
+        --argjson inference_peak_swap "$(number_or_zero "$inference_peak_swap")" \
+        --argjson decryption_wall "$(number_or_zero "$decryption_wall")" \
+        --argjson circuit_wall "$(circuit_seconds "$circuit_time")" \
+        --argjson layer1_wall "$(circuit_seconds "$layer1_time")" \
+        --argjson layer2_wall "$(circuit_seconds "$layer2_time")" \
+        --argjson layer3_wall "$(circuit_seconds "$layer3_time")" \
+        '{
+            schema_version: 1,
+            status: $status,
+            commit: $commit,
+            branch: $branch,
+            commit_subject: $commit_subject,
+            environment: {
+                experiment: $experiment,
+                test_image: $test_image,
+                test_image_sha256: $test_image_sha256,
+                weights_manifest_sha256: $weights_manifest_sha256,
+                cpu_model: $cpu_model,
+                logical_cpus: $logical_cpus,
+                total_ram_kb: $total_ram_kb,
+                openfhe_version: $openfhe_version
+            },
+            result: {
+                prediction: $prediction,
+                handgun_logit: $handgun_logit,
+                knife_logit: $knife_logit
+            },
+            metrics: {
+                pipeline_wall_seconds: $pipeline_wall_seconds,
+                key_generation: {
+                    wall_seconds: $keygen_wall,
+                    cpu_time_seconds: $keygen_cpu_time,
+                    average_cpu_percent: $keygen_avg_cpu,
+                    peak_cpu_percent: $keygen_peak_cpu,
+                    average_rss_kb: $keygen_avg_rss,
+                    peak_rss_kb: $keygen_peak_rss,
+                    peak_swap_kb: $keygen_peak_swap
+                },
+                encryption: {wall_seconds: $encryption_wall},
+                inference: {
+                    wall_seconds: $inference_wall,
+                    cpu_time_seconds: $inference_cpu_time,
+                    average_cpu_percent: $inference_avg_cpu,
+                    peak_cpu_percent: $inference_peak_cpu,
+                    average_rss_kb: $inference_avg_rss,
+                    peak_rss_kb: $inference_peak_rss,
+                    peak_swap_kb: $inference_peak_swap
+                },
+                decryption: {wall_seconds: $decryption_wall},
+                circuit: {
+                    wall_seconds: $circuit_wall,
+                    layer1_seconds: $layer1_wall,
+                    layer2_seconds: $layer2_wall,
+                    layer3_seconds: $layer3_wall
+                }
+            }
+        }' > "$BENCHMARK_JSON"
 }
 
 cleanup_generated() {
@@ -265,6 +590,12 @@ if [[ "$EXPERIMENT" != "1" ]]; then
 fi
 if [[ ! -x /usr/bin/time ]]; then
     echo "GNU time is required at /usr/bin/time." >&2
+    FAILURE_PHASE="preflight"
+    exit 2
+fi
+if ! command -v pidstat >/dev/null || ! command -v pgrep >/dev/null \
+        || ! command -v jq >/dev/null || ! command -v sha256sum >/dev/null; then
+    echo "pidstat, pgrep, jq, and sha256sum are required for benchmarking." >&2
     FAILURE_PHASE="preflight"
     exit 2
 fi

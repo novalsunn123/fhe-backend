@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dev-fhe-benchmark
+  group: fhe-benchmark
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,7 @@ jobs:
       CICD_BUILD_JOBS: "2"
       CICD_WEIGHTS_DIR: /home/fhe-runner/CICD/assets/weights
       CICD_REPORT_DIR: /home/fhe-runner/CICD/reports/${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CICD_BASELINE_FILE: /home/fhe-runner/CICD/state/dev-baseline.json
 
     steps:
       - name: Checkout dev commit
@@ -33,6 +34,14 @@ jobs:
 
       - name: Run full FHE benchmark
         run: ./CICD/run_pipeline.sh
+
+      - name: Update successful dev baseline
+        run: |
+          jq -e --arg sha "${{ github.sha }}" \
+            '.status == "passed" and .commit == $sha and .schema_version == 1' \
+            "$CICD_REPORT_DIR/benchmark.json" >/dev/null
+          install -d -m 0750 "$(dirname "$CICD_BASELINE_FILE")"
+          install -m 0640 "$CICD_REPORT_DIR/benchmark.json" "$CICD_BASELINE_FILE"
 
       - name: Publish benchmark summary
         if: always()
@@ -48,7 +57,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fhe-benchmark-${{ github.sha }}-${{ github.run_id }}
+          name: fhe-benchmark-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.CICD_REPORT_DIR }}
           if-no-files-found: warn
           retention-days: 30
