@@ -1,0 +1,24 @@
+# Không đưa thư mục build
+/FHEClient/build/
+/FHEServer/build/
+/data/
+# Không đưa khóa FHE
+/FHEClient/keys_exp*/
+/FHEClient/server_keys_exp*/
+/FHEServer/keys_exp*/
+
+# Không đưa model weights
+/FHEServer/weights/
+
+# Không đưa ciphertext và kết quả
+/FHEClient/ciphertexts/
+/FHEServer/ciphertexts/
+/FHEServer/results/
+/FHEServer/checkpoints/
+
+# Không đưa log, PID và core dump
+*.log
+*.pid
+*.lock
+core
+core.*

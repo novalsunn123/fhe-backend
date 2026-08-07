@@ -1,0 +1,5 @@
+/build/
+/keys_exp*/
+/ciphertexts/*.bin
+/results/*.bin
+/checkpoints/*.bin

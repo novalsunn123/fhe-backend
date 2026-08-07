@@ -1,0 +1,4 @@
+/build/
+/keys_exp*/
+/server_keys_exp*/
+/ciphertexts/*.bin
