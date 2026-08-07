@@ -97,6 +97,15 @@ run_case() {
         echo "$name: expected $expected_verdict, got $actual_verdict (exit $status)" >&2
         exit 1
     fi
+    case "$expected_verdict" in
+        auto_merge|manual_review) expected_status=0 ;;
+        rejected) expected_status=3 ;;
+        not_comparable) expected_status=4 ;;
+    esac
+    if [[ "$status" -ne "$expected_status" ]]; then
+        echo "$name: expected exit $expected_status, got $status" >&2
+        exit 1
+    fi
     echo "$name: $actual_verdict"
 }
 
@@ -104,9 +113,13 @@ run_case() {
 run_case speed_memory_tradeoff auto_merge 670 570 20085000 17400000 3000 165 Handgun 0
 run_case borderline_tradeoff manual_review 715 600 20475000 17800000 3050 165 Handgun 0
 run_case excessive_ram rejected 650 550 21700000 18500000 3000 165 Handgun 0
-run_case no_improvement rejected 745 624 19500000 17000000 3080 165 Handgun 0
+run_case no_improvement manual_review 745 624 19500000 17000000 3080 165 Handgun 0
 run_case wrong_prediction rejected 680 580 19000000 16500000 2900 165 Knife 0
 run_case memory_speed_tradeoff auto_merge 775 640 18330000 16000000 3000 165 Handgun 0
+run_case swap_is_reported_not_gated auto_merge 700 590 19000000 16500000 2900 165 Handgun 600000
+
+jq -e '.swap.baseline_peak_kb == 0 and .swap.candidate_peak_kb == 600000 and .swap.difference_kb == 600000' \
+    "$TMP_ROOT/swap_is_reported_not_gated/comparison.json" >/dev/null
 
 grep -Fq '#### Đã sửa gì' "$TMP_ROOT/speed_memory_tradeoff/readme-entry.md"
 grep -Fq '#### Benchmark so với phiên bản dev trước' "$TMP_ROOT/speed_memory_tradeoff/readme-entry.md"

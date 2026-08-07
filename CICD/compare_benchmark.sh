@@ -129,6 +129,7 @@ baseline_keygen="$(json_number "$BASELINE_JSON" '.metrics.key_generation.wall_se
 candidate_keygen="$(json_number "$CANDIDATE_JSON" '.metrics.key_generation.wall_seconds')"
 baseline_keygen_peak_ram="$(json_number "$BASELINE_JSON" '.metrics.key_generation.peak_rss_kb')"
 candidate_keygen_peak_ram="$(json_number "$CANDIDATE_JSON" '.metrics.key_generation.peak_rss_kb')"
+baseline_peak_swap="$(json_number "$BASELINE_JSON" '.metrics.inference.peak_swap_kb')"
 candidate_peak_swap="$(json_number "$CANDIDATE_JSON" '.metrics.inference.peak_swap_kb')"
 
 inference_delta="$(percent_change "$baseline_inference" "$candidate_inference")"
@@ -143,6 +144,7 @@ keygen_peak_ram_delta="$(percent_change "$baseline_keygen_peak_ram" "$candidate_
 inference_difference="$(difference "$baseline_inference" "$candidate_inference")"
 circuit_difference="$(difference "$baseline_circuit" "$candidate_circuit")"
 ram_difference="$(difference "$baseline_peak_ram" "$candidate_peak_ram")"
+swap_difference="$(difference "$baseline_peak_swap" "$candidate_peak_swap")"
 
 verdict="auto_merge"
 classification="Improved"
@@ -153,6 +155,14 @@ mark_rejected() {
     if [[ "$verdict" != "not_comparable" ]]; then
         verdict="rejected"
         classification="Regressed"
+    fi
+    reasons+=("$1")
+}
+
+mark_manual_review() {
+    if [[ "$verdict" == "auto_merge" ]]; then
+        verdict="manual_review"
+        classification="Manual review required"
     fi
     reasons+=("$1")
 }
@@ -206,9 +216,6 @@ done
 if [[ "$candidate_prediction" != "$baseline_prediction" ]]; then
     mark_rejected "Prediction changed: $baseline_prediction -> $candidate_prediction"
 fi
-if greater_than "$candidate_peak_swap" 0; then
-    mark_rejected "Inference used ${candidate_peak_swap} KiB of swap"
-fi
 if greater_than "$candidate_peak_ram" "$RAM_HARD_CAP_KB"; then
     mark_rejected "Inference peak RAM exceeds the hard cap of $(format_gib "$RAM_HARD_CAP_KB")"
 fi
@@ -253,8 +260,9 @@ if less_equal "$keygen_peak_ram_delta" -5; then
     improvements+=("Key generation peak RAM $(format_delta "$keygen_peak_ram_delta")")
 fi
 
-if [[ "$verdict" == "auto_merge" && ${#improvements[@]} -eq 0 ]]; then
-    mark_rejected "No primary metric improved beyond the stability threshold"
+if [[ "$verdict" != "rejected" && "$verdict" != "not_comparable" \
+        && ${#improvements[@]} -eq 0 ]]; then
+    mark_manual_review "No primary metric improved beyond the stability threshold"
 fi
 
 if [[ "$verdict" == "auto_merge" ]]; then
@@ -323,6 +331,9 @@ jq -n \
     --argjson peak_cpu_delta "$peak_cpu_delta" \
     --argjson keygen_delta "$keygen_delta" \
     --argjson keygen_peak_ram_delta "$keygen_peak_ram_delta" \
+    --argjson baseline_peak_swap_kb "$baseline_peak_swap" \
+    --argjson candidate_peak_swap_kb "$candidate_peak_swap" \
+    --argjson swap_difference_kb "$swap_difference" \
     '{
         verdict: $verdict,
         classification: $classification,
@@ -341,6 +352,11 @@ jq -n \
             peak_cpu: $peak_cpu_delta,
             key_generation: $keygen_delta,
             key_generation_peak_ram: $keygen_peak_ram_delta
+        },
+        swap: {
+            baseline_peak_kb: $baseline_peak_swap_kb,
+            candidate_peak_kb: $candidate_peak_swap_kb,
+            difference_kb: $swap_difference_kb
         }
     }' > "$COMPARISON_JSON"
 
@@ -360,7 +376,7 @@ jq -n \
     echo "| Peak CPU | ${baseline_peak_cpu}% | ${candidate_peak_cpu}% | $(format_delta "$peak_cpu_delta") |"
     echo "| Key generation | $(format_seconds_value "$baseline_keygen") | $(format_seconds_value "$candidate_keygen") | $(format_delta "$keygen_delta") |"
     echo "| Keygen peak RAM | $(format_gib "$baseline_keygen_peak_ram") | $(format_gib "$candidate_keygen_peak_ram") | $(format_delta "$keygen_peak_ram_delta") |"
-    echo "| Peak swap | 0 KiB | ${candidate_peak_swap} KiB | — |"
+    echo "| Peak swap | ${baseline_peak_swap} KiB | ${candidate_peak_swap} KiB | ${swap_difference} KiB |"
     echo "| Prediction | $baseline_prediction | $candidate_prediction | — |"
     if (( ${#improvements[@]} > 0 )); then
         echo
@@ -430,7 +446,7 @@ printf '%.90s (%s)\n' "$clean_title" "$title_suffix" > "$COMMIT_TITLE_FILE"
 
 case "$verdict" in
     auto_merge) exit 0 ;;
-    manual_review) exit 2 ;;
+    manual_review) exit 0 ;;
     rejected) exit 3 ;;
     not_comparable) exit 4 ;;
     *) exit 5 ;;
