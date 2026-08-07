@@ -45,10 +45,15 @@ The gate has four outcomes:
 
 - `auto_merge`: at least one primary metric improved and all regressions or
   speed/memory trade-offs are within policy;
-- `manual_review`: the change is promising but outside automatic trade-off
-  limits;
+- `manual_review`: correctness passed, but the change is stable without a
+  primary improvement or has a trade-off outside automatic promotion limits;
 - `rejected`: correctness, safety, or regression limits failed;
 - `not_comparable`: the baseline SHA or benchmark environment changed.
+
+Peak swap is recorded in the benchmark comparison for observability, but it
+does not affect the promotion verdict. RAM safety continues to be enforced by
+the inference and key-generation peak-RSS limits. A manual-review verdict keeps
+the benchmark check successful but never triggers the automatic promotion job.
 
 An eligible candidate is squash-merged by a separate promotion job. The new
 code commit title includes inference and peak-RAM deltas, while its body holds
