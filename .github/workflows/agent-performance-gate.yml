@@ -1,0 +1,206 @@
+name: Agent performance gate
+
+on:
+  pull_request_target:
+    branches:
+      - dev
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: fhe-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'agent/') &&
+      github.event.pull_request.draft == false
+    permissions:
+      contents: read
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 1440
+    outputs:
+      verdict: ${{ steps.compare.outputs.verdict }}
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+      FHE_EXPERIMENT: "1"
+      FHE_TEST_IMAGE: FHEClient/inputs/2041_0.png
+      CICD_BUILD_JOBS: "2"
+      CICD_WEIGHTS_DIR: /home/fhe-runner/CICD/assets/weights
+      CICD_BASELINE_FILE: /home/fhe-runner/CICD/state/dev-baseline.json
+      CICD_REPORT_DIR: /home/fhe-runner/CICD/reports/pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout trusted dev benchmark tools
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          clean: true
+          persist-credentials: false
+
+      - name: Checkout candidate source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          clean: true
+          persist-credentials: false
+
+      - name: Validate dev baseline
+        run: |
+          if [[ ! -s "$CICD_BASELINE_FILE" ]]; then
+            echo "Missing dev baseline: $CICD_BASELINE_FILE" >&2
+            echo "Run the dev bootstrap benchmark first." >&2
+            exit 1
+          fi
+          jq -e --arg sha "$BASE_SHA" \
+            '.status == "passed" and .commit == $sha and .schema_version == 1' \
+            "$CICD_BASELINE_FILE" >/dev/null
+
+      - name: Validate version change note
+        run: |
+          install -d -m 0750 "$CICD_REPORT_DIR"
+          printf '%s\n' "$PR_BODY" > "$CICD_REPORT_DIR/change-note.md"
+          trusted/CICD/validate_change_note.sh "$CICD_REPORT_DIR/change-note.md"
+
+      - name: Install trusted benchmark harness
+        run: |
+          cp trusted/CICD/run_pipeline.sh candidate/CICD/run_pipeline.sh
+          chmod +x candidate/CICD/run_pipeline.sh
+
+      - name: Benchmark candidate
+        working-directory: candidate
+        env:
+          FHE_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha }}
+          FHE_BENCHMARK_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          GITHUB_WORKSPACE="$PWD" ./CICD/run_pipeline.sh
+
+      - name: Compare candidate with dev
+        id: compare
+        run: |
+          cp "$CICD_BASELINE_FILE" "$CICD_REPORT_DIR/baseline.json"
+          set +e
+          trusted/CICD/compare_benchmark.sh \
+            "$CICD_BASELINE_FILE" \
+            "$CICD_REPORT_DIR/benchmark.json" \
+            "$CICD_REPORT_DIR" \
+            "$PR_TITLE" \
+            "$BASE_SHA" \
+            "$HEAD_SHA" \
+            "$CICD_REPORT_DIR/change-note.md"
+          comparison_status=$?
+          verdict="$(jq -r '.verdict // "comparison_failed"' "$CICD_REPORT_DIR/comparison.json" 2>/dev/null || echo comparison_failed)"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          exit "$comparison_status"
+
+      - name: Publish benchmark and comparison
+        if: always()
+        run: |
+          if [[ -f "$CICD_REPORT_DIR/summary.md" ]]; then
+            cat "$CICD_REPORT_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f "$CICD_REPORT_DIR/comparison.md" ]]; then
+            cat "$CICD_REPORT_DIR/comparison.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload candidate benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fhe-candidate-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CICD_REPORT_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
+
+  promote:
+    needs: benchmark
+    if: >-
+      needs.benchmark.result == 'success' &&
+      needs.benchmark.outputs.verdict == 'auto_merge'
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+    steps:
+      - name: Checkout trusted promotion tool
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          clean: true
+          persist-credentials: false
+
+      - name: Download verified benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: fhe-candidate-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: promotion-input
+
+      - name: Squash-merge approved candidate into dev
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          trusted/CICD/promote_pr.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            "$HEAD_SHA" \
+            "${{ github.event.pull_request.base.sha }}" \
+            promotion-input/benchmark.json \
+            promotion-input/comparison.json \
+            promotion-input/commit-title.txt \
+            promotion-input/commit-body.md \
+            promotion-input/readme-entry.md \
+            promotion-input/baseline.json
+
+      - name: Upload promoted baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: fhe-promoted-baseline-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: promotion-input/baseline.json
+          if-no-files-found: error
+          retention-days: 30
+
+  finalize-baseline:
+    needs: promote
+    if: needs.promote.result == 'success'
+    permissions:
+      actions: read
+      contents: read
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 10
+    env:
+      CICD_BASELINE_FILE: /home/fhe-runner/CICD/state/dev-baseline.json
+
+    steps:
+      - name: Download promoted baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: fhe-promoted-baseline-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: promoted-state
+
+      - name: Install promoted dev baseline
+        run: |
+          jq -e --arg candidate "${{ github.event.pull_request.head.sha }}" \
+            '.status == "passed" and .schema_version == 1 and .branch == "dev"
+             and .promoted_from_candidate == $candidate
+             and .commit == .documentation_commit
+             and (.code_commit | type == "string")' \
+            promoted-state/baseline.json >/dev/null
+          install -d -m 0750 "$(dirname "$CICD_BASELINE_FILE")"
+          install -m 0640 promoted-state/baseline.json "$CICD_BASELINE_FILE"
+          echo "Dev baseline advanced to $(jq -r '.commit' "$CICD_BASELINE_FILE")"
