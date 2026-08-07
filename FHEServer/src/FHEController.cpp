@@ -3,6 +3,7 @@
 //
 
 #include "FHEController.h"
+#include "Profiler.h"
 
 void FHEController::generate_context(bool serialize) {
     CCParams<CryptoContextCKKSRNS> parameters;
@@ -195,27 +196,40 @@ void FHEController::load_context(bool verbose) {
 }
 
 void FHEController::load_server_context(bool verbose) {
+    ProfileScope total_profile("context_load", "initial_context_and_key_loading");
     context->ClearEvalMultKeys();
     context->ClearEvalAutomorphismKeys();
     CryptoContextFactory<lbcrypto::DCRTPoly>::ReleaseAllContexts();
 
     const string root = "../" + parameters_folder + "/";
-    if (!Serial::DeserializeFromFile(root + "crypto-context.txt", context, SerType::BINARY)) {
-        cerr << "Cannot read " << root + "crypto-context.txt" << endl;
-        exit(1);
+    {
+        ProfileScope profile("context_load", "crypto_context_deserialization");
+        profile.setFile(root + "crypto-context.txt");
+        if (!Serial::DeserializeFromFile(root + "crypto-context.txt", context, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Cannot read " + root + "crypto-context.txt");
+        }
     }
 
     PublicKey<DCRTPoly> publicKey;
-    if (!Serial::DeserializeFromFile(root + "public-key.txt", publicKey, SerType::BINARY)) {
-        cerr << "Cannot read " << root + "public-key.txt" << endl;
-        exit(1);
+    {
+        ProfileScope profile("key_load", "public_key_deserialization");
+        profile.setFile(root + "public-key.txt");
+        if (!Serial::DeserializeFromFile(root + "public-key.txt", publicKey, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Cannot read " + root + "public-key.txt");
+        }
     }
     key_pair.publicKey = publicKey;
 
-    ifstream multKeyStream(root + "mult-keys.txt", ios::in | ios::binary);
-    if (!multKeyStream.is_open() || !context->DeserializeEvalMultKey(multKeyStream, SerType::BINARY)) {
-        cerr << "Cannot read multiplication keys from " << root << endl;
-        exit(1);
+    {
+        ProfileScope profile("key_load", "multiplication_keys_deserialization");
+        profile.setFile(root + "mult-keys.txt");
+        ifstream multKeyStream(root + "mult-keys.txt", ios::in | ios::binary);
+        if (!multKeyStream.is_open() || !context->DeserializeEvalMultKey(multKeyStream, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Cannot read multiplication keys from " + root);
+        }
     }
 
     relu_degree = stoi(read_from_file(root + "relu_degree.txt"));
@@ -318,20 +332,30 @@ void FHEController::load_bootstrapping_and_rotation_keys(const string& filename,
 
     auto start = start_time();
 
-    context->EvalBootstrapSetup(level_budget, {0, 0}, bootstrap_slots);
+    {
+        ProfileScope profile("key_load", "bootstrap_precomputation_" + to_string(bootstrap_slots) + "_slots");
+        profile.setSlots(bootstrap_slots);
+        context->EvalBootstrapSetup(level_budget, {0, 0}, bootstrap_slots);
+    }
 
     if (verbose)  cout << "(1/2) Bootstrapping precomputations completed!" << endl;
 
 
-    ifstream rotKeyIStream("../" + parameters_folder + "/rot_" + filename, ios::in | ios::binary);
-    if (!rotKeyIStream.is_open()) {
-        cerr << "Cannot read serialization from " << "../" + parameters_folder + "/" << "rot_" << filename << std::endl;
-        exit(1);
-    }
+    {
+        const string path = "../" + parameters_folder + "/rot_" + filename;
+        ProfileScope profile("key_load", "rotation_keys_" + filename);
+        profile.setSlots(bootstrap_slots);
+        profile.setFile(path);
+        ifstream rotKeyIStream(path, ios::in | ios::binary);
+        if (!rotKeyIStream.is_open()) {
+            profile.fail();
+            throw runtime_error("Cannot read serialization from " + path);
+        }
 
-    if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
-        cerr << "Could not deserialize eval rot key file" << std::endl;
-        exit(1);
+        if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Could not deserialize eval rot key file " + path);
+        }
     }
 
     if (verbose) cout << "(2/2) Rotation keys read!" << endl;
@@ -346,15 +370,20 @@ void FHEController::load_rotation_keys(const string& filename, bool verbose) {
 
     auto start = start_time();
 
-    ifstream rotKeyIStream("../" + parameters_folder + "/rot_" + filename, ios::in | ios::binary);
-    if (!rotKeyIStream.is_open()) {
-        cerr << "Cannot read serialization from " << "../" + parameters_folder + "/" << "rot_" << filename << std::endl;
-        exit(1);
-    }
+    {
+        const string path = "../" + parameters_folder + "/rot_" + filename;
+        ProfileScope profile("key_load", "rotation_keys_" + filename);
+        profile.setFile(path);
+        ifstream rotKeyIStream(path, ios::in | ios::binary);
+        if (!rotKeyIStream.is_open()) {
+            profile.fail();
+            throw runtime_error("Cannot read serialization from " + path);
+        }
 
-    if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
-        cerr << "Could not deserialize eval rot key file" << std::endl;
-        exit(1);
+        if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Could not deserialize eval rot key file " + path);
+        }
     }
 
     if (verbose) {
@@ -468,6 +497,9 @@ Ctxt FHEController::mult(const Ctxt &c, const Ptxt& p) {
 }
 
 Ctxt FHEController::bootstrap(const Ctxt &c, bool timing) {
+    ProfileScope profile("bootstrap", "bootstrap_" + to_string(c->GetSlots()) + "_slots");
+    profile.setSlots(c->GetSlots());
+    profile.setLevelBefore(c->GetLevel());
     if (static_cast<int>(c->GetLevel()) + 2 < circuit_depth && timing) {
         cout << "You are bootstrapping with remaining levels! You are at " << to_string(c->GetLevel()) << "/" << circuit_depth - 2 << endl;
     }
@@ -476,6 +508,7 @@ Ctxt FHEController::bootstrap(const Ctxt &c, bool timing) {
     auto start = start_time();
 
     Ctxt res = context->EvalBootstrap(c);
+    profile.setLevelAfter(res->GetLevel());
 
     if (timing) {
         print_duration(start, "Bootstrapping " + to_string(c->GetSlots()) + " slots");
@@ -485,6 +518,9 @@ Ctxt FHEController::bootstrap(const Ctxt &c, bool timing) {
 }
 
 Ctxt FHEController::bootstrap(const Ctxt &c, int precision, bool timing) {
+    ProfileScope profile("bootstrap", "double_bootstrap_" + to_string(c->GetSlots()) + "_slots");
+    profile.setSlots(c->GetSlots());
+    profile.setLevelBefore(c->GetLevel());
     if (static_cast<int>(c->GetLevel()) + 2 < circuit_depth) {
         cout << "You are bootstrapping with remaining levels! You are at " << to_string(c->GetLevel()) << "/" << circuit_depth - 2 << endl;
     }
@@ -492,6 +528,7 @@ Ctxt FHEController::bootstrap(const Ctxt &c, int precision, bool timing) {
     auto start = start_time();
 
     Ctxt res = context->EvalBootstrap(c, 2, precision);
+    profile.setLevelAfter(res->GetLevel());
 
     if (timing) {
         print_duration(start, "Double Bootstrapping " + to_string(c->GetSlots()) + " slots");
@@ -502,6 +539,7 @@ Ctxt FHEController::bootstrap(const Ctxt &c, int precision, bool timing) {
 }
 
 Ctxt FHEController::relu(const Ctxt &c, double scale, bool timing) {
+    ProfileScope profile("activation", "relu_degree_" + to_string(relu_degree));
     auto start = start_time();
 
     Ctxt res = context->EvalChebyshevFunction([scale](double x) -> double { if (x < 0) return 0; else return (1 / scale) * x; }, c,
@@ -516,6 +554,7 @@ Ctxt FHEController::relu(const Ctxt &c, double scale, bool timing) {
 }
 
 Ctxt FHEController::relu_wide(const Ctxt &c, double a, double b, int degree, double scale, bool timing) {
+    ProfileScope profile("activation", "relu_wide_degree_" + to_string(degree));
     auto start = start_time();
 
     Ctxt res = context->EvalChebyshevFunction([scale](double x) -> double { if (x < 0) return 0; else return (1 / scale) * x; }, c,
@@ -635,6 +674,7 @@ void FHEController::print_min_max(const Ctxt &c) {
  * Convolutional Neural Network functions
  */
 Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
+    ProfileScope profile("convolution", "initial_convolution");
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -702,6 +742,7 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
 }
 
 Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer1_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -762,6 +803,7 @@ Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool 
 }
 
 Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer2_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -822,6 +864,7 @@ Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool
 }
 
 Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer3_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -882,6 +925,7 @@ Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool
 }
 
 vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer2_transition_main_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -957,6 +1001,7 @@ vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, doubl
 }
 
 vector<Ctxt> FHEController::convbn1632dx(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer2_transition_skip_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> applied_filters16;
@@ -1009,6 +1054,7 @@ vector<Ctxt> FHEController::convbn1632dx(const Ctxt &in, int layer, int n, doubl
 }
 
 vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer3_transition_main_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -1084,6 +1130,7 @@ vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, doubl
 }
 
 vector<Ctxt> FHEController::convbn3264dx(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer3_transition_skip_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> applied_filters32;
@@ -1136,6 +1183,7 @@ vector<Ctxt> FHEController::convbn3264dx(const Ctxt &in, int layer, int n, doubl
 }
 
 Ctxt FHEController::downsample1024to256(const Ctxt &c1, const Ctxt &c2) {
+    ProfileScope profile("downsample", "downsample_1024_to_256");
     c1->SetSlots(32768);
     c2->SetSlots(32768);
     num_slots = 16384*2;
@@ -1189,6 +1237,7 @@ Ctxt FHEController::downsample1024to256(const Ctxt &c1, const Ctxt &c2) {
 
 
 Ctxt FHEController::downsample256to64(const Ctxt &c1, const Ctxt &c2) {
+    ProfileScope profile("downsample", "downsample_256_to_64");
     c1->SetSlots(16384);
     c2->SetSlots(16384);
     num_slots = 8192*2;
@@ -1260,6 +1309,7 @@ Ctxt FHEController::repeat(const Ctxt &in, int slots) {
 }
 
 Ctxt FHEController::convbn1632sxV2(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer2_transition_main_v2_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -1334,6 +1384,7 @@ Ctxt FHEController::convbn1632sxV2(const Ctxt &in, int layer, int n, double scal
 }
 
 Ctxt FHEController::convbn1632dxV2(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer2_transition_skip_v2_conv_" + to_string(n));
     auto start = start_time();
 
     in->SetSlots(16384 * 2);
@@ -1382,6 +1433,7 @@ Ctxt FHEController::convbn1632dxV2(const Ctxt &in, int layer, int n, double scal
 }
 
 Ctxt FHEController::convbnV2(const Ctxt &in, int layer, int n, double scale, bool timing) {
+    ProfileScope profile("convolution", "layer1_v2_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;

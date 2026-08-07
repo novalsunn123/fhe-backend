@@ -15,4 +15,10 @@ link_directories(${OPENMP_LIBRARIES})
 set(CMAKE_EXE_LINKER_FLAGS ${OpenFHE_EXE_LINKER_FLAGS})
 link_libraries(${OpenFHE_SHARED_LIBRARIES})
 
-add_executable(FHEServer src/main.cpp src/FHEController.cpp src/FHEController.h src/Utils.h)
+add_executable(FHEServer
+        src/main.cpp
+        src/FHEController.cpp
+        src/FHEController.h
+        src/Profiler.cpp
+        src/Profiler.h
+        src/Utils.h)
