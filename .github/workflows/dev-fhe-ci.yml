@@ -1,0 +1,54 @@
+name: Dev FHE end-to-end benchmark
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-fhe-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 1440
+    env:
+      FHE_EXPERIMENT: "1"
+      FHE_TEST_IMAGE: FHEClient/inputs/2041_0.png
+      CICD_BUILD_JOBS: "2"
+      CICD_WEIGHTS_DIR: /home/fhe-runner/CICD/assets/weights
+      CICD_REPORT_DIR: /home/fhe-runner/CICD/reports/${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout dev commit
+        uses: actions/checkout@v6
+        with:
+          clean: true
+
+      - name: Run full FHE benchmark
+        run: ./CICD/run_pipeline.sh
+
+      - name: Publish benchmark summary
+        if: always()
+        run: |
+          if [[ -f "$CICD_REPORT_DIR/summary.md" ]]; then
+            cat "$CICD_REPORT_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "# FHE CI benchmark" >> "$GITHUB_STEP_SUMMARY"
+            echo "Benchmark report was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fhe-benchmark-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.CICD_REPORT_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
