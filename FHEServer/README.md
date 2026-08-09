@@ -24,6 +24,11 @@ when deploying the server to another machine.
 
 FHEServer can emit context/key-loading, layer, residual-block, convolution,
 activation, downsample, and bootstrap timings without changing the FHE circuit.
+The convolution breakdown separately measures weight-file open/read/text parse,
+plaintext encoding, rotation precomputation, every fast/regular rotation,
+plaintext multiplication, ciphertext addition, and `EvalAddMany`. JSON schema 2
+contains aggregate count/total/average/maximum values while CSV retains every
+individual event and its layer/block context.
 Profiling is disabled by default. Enable it with:
 
 ```bash

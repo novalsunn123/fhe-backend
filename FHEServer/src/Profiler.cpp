@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 
@@ -91,6 +92,35 @@ struct BootstrapSummary {
     std::string slowest;
 };
 
+struct OperationSummary {
+    std::size_t count = 0;
+    double total = 0.0;
+    double maximum = 0.0;
+};
+
+const std::vector<std::string>& convolutionOperationTypes() {
+    static const std::vector<std::string> types = {
+        "weight_file_open", "weight_file_read", "weight_text_parse",
+        "plaintext_encode", "rotation_precompute", "fast_rotation",
+        "rotation", "eval_mult_plain", "eval_add", "eval_add_many"
+    };
+    return types;
+}
+
+std::map<std::string, OperationSummary> summarizeOperations(
+        const std::vector<ProfileEvent>& events) {
+    std::map<std::string, OperationSummary> summaries;
+    for (const auto& type : convolutionOperationTypes()) summaries[type] = {};
+    for (const auto& event : events) {
+        auto found = summaries.find(event.event_type);
+        if (found == summaries.end()) continue;
+        ++found->second.count;
+        found->second.total += event.duration_seconds;
+        found->second.maximum = std::max(found->second.maximum, event.duration_seconds);
+    }
+    return summaries;
+}
+
 BootstrapSummary summarizeBootstraps(const std::vector<ProfileEvent>& events) {
     BootstrapSummary result;
     for (const auto& event : events) {
@@ -157,6 +187,28 @@ void OperationProfiler::record(ProfileEvent event) {
     events_.push_back(std::move(event));
 }
 
+void OperationProfiler::recordDuration(const std::string& event_type,
+                                       const std::string& event_name,
+                                       double duration_seconds,
+                                       const std::string& file,
+                                       bool include_file_size) {
+    if (!enabled_) return;
+    ProfileEvent event;
+    event.sequence = nextSequence();
+    event.event_type = event_type;
+    event.event_name = event_name;
+    event.layer = currentLayer();
+    event.block = currentBlock();
+    event.duration_seconds = duration_seconds;
+    event.file = file;
+    if (include_file_size && !file.empty()) {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(file, error);
+        if (!error) event.file_size_bytes = size;
+    }
+    record(std::move(event));
+}
+
 void OperationProfiler::setContext(const std::string& layer, const std::string& block) {
     profile_layer = layer;
     profile_block = block;
@@ -195,6 +247,7 @@ void OperationProfiler::writeMarkdown(const std::string& status,
     std::ofstream output(path);
     requireWritable(output, path);
     const BootstrapSummary bootstrap = summarizeBootstraps(events);
+    const auto operation_summaries = summarizeOperations(events);
 
     output << "# FHEServer operation profile\n\n"
            << "| Metric | Value |\n|---|---|\n"
@@ -228,6 +281,22 @@ void OperationProfiler::writeMarkdown(const std::string& status,
                << (event.file.empty() ? "—" : event.file) << " | ";
         if (event.file_size_bytes) output << *event.file_size_bytes; else output << "—";
         output << " | " << formatDuration(event.duration_seconds) << " | " << event.status << " |\n";
+    }
+
+    output << "\n## Convolution operation breakdown\n\n"
+           << "The rows below are non-overlapping operation timers. Weight timers are "
+              "recorded per file; cryptographic timers are recorded per call.\n\n"
+           << "| Operation | Count | Total | Average | Slowest call |\n"
+           << "|---|---:|---:|---:|---:|\n";
+    for (const auto& type : convolutionOperationTypes()) {
+        const auto& summary = operation_summaries.at(type);
+        output << "| " << type << " | " << summary.count << " | "
+               << formatDuration(summary.count ? std::optional<double>(summary.total) : std::nullopt)
+               << " | "
+               << formatDuration(summary.count ? std::optional<double>(summary.total / summary.count) : std::nullopt)
+               << " | "
+               << formatDuration(summary.count ? std::optional<double>(summary.maximum) : std::nullopt)
+               << " |\n";
     }
 
     output << "\n## Layer and block timings\n\n"
@@ -280,8 +349,9 @@ void OperationProfiler::writeJson(const std::string& status,
     std::ofstream output(path);
     requireWritable(output, path);
     const BootstrapSummary bootstrap = summarizeBootstraps(events);
+    const auto operation_summaries = summarizeOperations(events);
     output << std::fixed << std::setprecision(6)
-           << "{\n  \"schema_version\": 1,\n"
+           << "{\n  \"schema_version\": 2,\n"
            << "  \"status\": \"" << jsonEscape(status) << "\",\n"
            << "  \"error_summary\": ";
     if (error_summary.empty()) output << "null"; else output << "\"" << jsonEscape(error_summary) << "\"";
@@ -315,7 +385,22 @@ void OperationProfiler::writeJson(const std::string& status,
         const auto duration = durationForName(events, name);
         if (duration) output << *duration; else output << "null";
     }
-    output << "\n  },\n  \"block_summary\": {";
+    output << "\n  },\n  \"convolution_operation_summary\": {";
+    bool first_operation = true;
+    for (const auto& type : convolutionOperationTypes()) {
+        const auto& summary = operation_summaries.at(type);
+        output << (first_operation ? "\n" : ",\n")
+               << "    \"" << jsonEscape(type) << "\": {\"count\": " << summary.count
+               << ", \"total_seconds\": " << summary.total
+               << ", \"average_seconds\": ";
+        if (summary.count) output << summary.total / summary.count; else output << "null";
+        output << ", \"maximum_seconds\": ";
+        if (summary.count) output << summary.maximum; else output << "null";
+        output << "}";
+        first_operation = false;
+    }
+    if (!first_operation) output << '\n';
+    output << "  },\n  \"block_summary\": {";
     bool first_block = true;
     for (const auto& event : events) {
         if (event.event_type != "block") continue;

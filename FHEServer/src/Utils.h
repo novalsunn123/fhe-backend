@@ -8,6 +8,8 @@
 #include <iostream>
 #include <openfhe.h>
 
+#include "Profiler.h"
+
 #define YELLOW_TEXT "\033[1;33m"
 #define RESET_COLOR "\033[0m"
 
@@ -71,7 +73,17 @@ namespace utils {
 
     static inline vector<double> read_values_from_file(const string& filename, double scale = 1) {
         vector<double> values;
+        const bool profile_weights = OperationProfiler::instance().enabled() &&
+                                     (filename.find("/weights/") != string::npos ||
+                                      filename.rfind("../weights/", 0) == 0);
+        steady_clock::time_point open_started;
+        if (profile_weights) open_started = steady_clock::now();
         ifstream file(filename);
+        if (profile_weights) {
+            OperationProfiler::instance().recordDuration(
+                "weight_file_open", "open_weight_file",
+                duration<double>(steady_clock::now() - open_started).count(), filename, true);
+        }
 
         if (!file.is_open()) {
             std::cerr << "Can not open " << filename << std::endl;
@@ -79,7 +91,19 @@ namespace utils {
         }
 
         string row;
-        while (std::getline(file, row)) {
+        double read_seconds = 0.0;
+        double parse_seconds = 0.0;
+        while (true) {
+            steady_clock::time_point read_started;
+            if (profile_weights) read_started = steady_clock::now();
+            const bool has_row = static_cast<bool>(std::getline(file, row));
+            if (profile_weights) {
+                read_seconds += duration<double>(steady_clock::now() - read_started).count();
+            }
+            if (!has_row) break;
+
+            steady_clock::time_point parse_started;
+            if (profile_weights) parse_started = steady_clock::now();
             istringstream stream(row);
             string value;
             while (std::getline(stream, value, ',')) {
@@ -91,6 +115,15 @@ namespace utils {
                     cerr << "Can not convert: " << value << endl;
                 }
             }
+            if (profile_weights) {
+                parse_seconds += duration<double>(steady_clock::now() - parse_started).count();
+            }
+        }
+        if (profile_weights) {
+            OperationProfiler::instance().recordDuration(
+                "weight_file_read", "read_weight_file", read_seconds, filename);
+            OperationProfiler::instance().recordDuration(
+                "weight_text_parse", "parse_weight_text", parse_seconds, filename);
         }
 
         file.close();

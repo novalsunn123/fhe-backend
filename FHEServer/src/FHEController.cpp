@@ -5,6 +5,70 @@
 #include "FHEController.h"
 #include "Profiler.h"
 
+namespace {
+class ProfiledConvolutionContext {
+private:
+    template <typename Callable>
+    decltype(auto) measure(const std::string& type, const std::string& name,
+                           Callable&& callable) {
+        ProfileScope profile(type, prefix_ + "_" + name);
+        return std::forward<Callable>(callable)();
+    }
+
+public:
+    ProfiledConvolutionContext(CryptoContext<DCRTPoly> context, std::string prefix)
+        : context_(std::move(context)), prefix_(std::move(prefix)) {}
+
+    auto EvalFastRotationPrecompute(const Ctxt& input) {
+        return measure("rotation_precompute", "eval_fast_rotation_precompute", [&] {
+            return context_->EvalFastRotationPrecompute(input);
+        });
+    }
+
+    template <typename Digits>
+    Ctxt EvalFastRotation(const Ctxt& input, int32_t index, uint32_t cyclotomic_order,
+                          const Digits& digits) {
+        return measure("fast_rotation", "eval_fast_rotation_" + std::to_string(index), [&] {
+            return context_->EvalFastRotation(input, index, cyclotomic_order, digits);
+        });
+    }
+
+    Ctxt EvalRotate(const Ctxt& input, int32_t index) {
+        return measure("rotation", "eval_rotate_" + std::to_string(index), [&] {
+            return context_->EvalRotate(input, index);
+        });
+    }
+
+    Ctxt EvalMult(const Ctxt& input, const Ptxt& plaintext) {
+        return measure("eval_mult_plain", "eval_mult_plain", [&] {
+            return context_->EvalMult(input, plaintext);
+        });
+    }
+
+    Ctxt EvalAdd(const Ctxt& left, const Ctxt& right) {
+        return measure("eval_add", "eval_add_ciphertexts", [&] {
+            return context_->EvalAdd(left, right);
+        });
+    }
+
+    Ctxt EvalAdd(const Ctxt& input, const Ptxt& plaintext) {
+        return measure("eval_add", "eval_add_plaintext", [&] {
+            return context_->EvalAdd(input, plaintext);
+        });
+    }
+
+    Ctxt EvalAddMany(const std::vector<Ctxt>& inputs) {
+        return measure("eval_add_many", "eval_add_many", [&] {
+            return context_->EvalAddMany(inputs);
+        });
+    }
+
+private:
+    CryptoContext<DCRTPoly> context_;
+    std::string prefix_;
+};
+}  // namespace
+
 void FHEController::generate_context(bool serialize) {
     CCParams<CryptoContextCKKSRNS> parameters;
 
@@ -419,6 +483,7 @@ void FHEController::clear_context(int bootstrapping_key_slots) {
  * CKKS Encoding/Decoding/Encryption/Decryption
  */
 Ptxt FHEController::encode(const vector<double> &vec, int level, int plaintext_num_slots) {
+    ProfileScope profile("plaintext_encode", "encode_vector_plaintext");
     if (plaintext_num_slots == 0) {
         plaintext_num_slots = num_slots;
     }
@@ -429,6 +494,7 @@ Ptxt FHEController::encode(const vector<double> &vec, int level, int plaintext_n
 }
 
 Ptxt FHEController::encode(double val, int level, int plaintext_num_slots) {
+    ProfileScope profile("plaintext_encode", "encode_scalar_plaintext");
     if (plaintext_num_slots == 0) {
         plaintext_num_slots = num_slots;
     }
@@ -675,6 +741,7 @@ void FHEController::print_min_max(const Ctxt &c) {
  */
 Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
     ProfileScope profile("convolution", "initial_convolution");
+    ProfiledConvolutionContext profiled_context(context, "initial_convolution");
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -682,21 +749,21 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
     int img_width = 32;
     int padding = 1;
 
-    auto digits = context->EvalFastRotationPrecompute(in);
+    auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
 
     Ptxt bias = encode(read_values_from_file("../weights/conv1bn1-bias.bin", scale), in->GetLevel(), 16384);
 
@@ -709,29 +776,30 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
             vector<double> values = read_values_from_file("../weights/conv1bn1-ch" +
                                                           to_string(j) + "-k" + to_string(k+1) + ".bin", scale);
             Ptxt encoded = encode(values, in->GetLevel(), 16384);
-            k_rows.push_back(context->EvalMult(c_rotations[k], encoded));
+            k_rows.push_back(profiled_context.EvalMult(c_rotations[k], encoded));
         }
 
-        Ctxt sum = context->EvalAddMany(k_rows);
+        Ctxt sum = profiled_context.EvalAddMany(k_rows);
 
         Ctxt res = sum->Clone();
 
-        res = add(res, context->EvalRotate(sum, 1024));
-        res = add(res, context->EvalRotate(context->EvalRotate(sum, 1024), 1024));
-        res = mult(res, mask_from_to(0, 1024, res->GetLevel()));
+        res = profiled_context.EvalAdd(res, profiled_context.EvalRotate(sum, 1024));
+        res = profiled_context.EvalAdd(
+            res, profiled_context.EvalRotate(profiled_context.EvalRotate(sum, 1024), 1024));
+        res = profiled_context.EvalMult(res, mask_from_to(0, 1024, res->GetLevel()));
 
 
         if (j == 0) {
             finalsum = res->Clone();
-            finalsum = context->EvalRotate(finalsum, 1024);
+            finalsum = profiled_context.EvalRotate(finalsum, 1024);
         } else {
-            finalsum = context->EvalAdd(finalsum, res);
-            finalsum = context->EvalRotate(finalsum, 1024);
+            finalsum = profiled_context.EvalAdd(finalsum, res);
+            finalsum = profiled_context.EvalRotate(finalsum, 1024);
         }
 
     }
 
-    finalsum = context->EvalAdd(finalsum, bias);
+    finalsum = profiled_context.EvalAdd(finalsum, bias);
 
     if (timing) {
         print_duration(start, "Initial layer");
@@ -743,6 +811,8 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
 
 Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer1_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer1_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -750,23 +820,23 @@ Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool 
     int img_width = 32;
     int padding = 1;
 
-    auto digits = context->EvalFastRotationPrecompute(in);
+    auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
     //TODO: combinations of rotations in order to perform only 8 rotations
 
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), in->GetLevel(), 16384);
 
@@ -779,21 +849,21 @@ Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool 
             vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                       to_string(j) + "-k" + to_string(k+1) + ".bin", scale);
             Ptxt encoded = encode(values, in->GetLevel(), 16384);
-            k_rows.push_back(context->EvalMult(c_rotations[k], encoded));
+            k_rows.push_back(profiled_context.EvalMult(c_rotations[k], encoded));
         }
 
-        Ctxt sum = context->EvalAddMany(k_rows);
+        Ctxt sum = profiled_context.EvalAddMany(k_rows);
         if (j == 0) {
             finalsum = sum->Clone();
-            finalsum = context->EvalRotate(finalsum, -1024);
+            finalsum = profiled_context.EvalRotate(finalsum, -1024);
         } else {
-            finalsum = context->EvalAdd(finalsum, sum);
-            finalsum = context->EvalRotate(finalsum, -1024);
+            finalsum = profiled_context.EvalAdd(finalsum, sum);
+            finalsum = profiled_context.EvalRotate(finalsum, -1024);
         }
 
     }
 
-    finalsum = context->EvalAdd(finalsum, bias);
+    finalsum = profiled_context.EvalAdd(finalsum, bias);
 
     if (timing) {
         print_duration(start, "Block " + to_string(layer) + " - convbn" + to_string(n));
@@ -804,6 +874,8 @@ Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool 
 
 Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer2_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer2_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -811,23 +883,23 @@ Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool
     int img_width = 16;
     int padding = 1;
 
-    auto digits = context->EvalFastRotationPrecompute(in);
+    auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
     //TODO: combinations of rotations in order to perform only 8 rotations
 
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), circuit_depth-2, 8192);
 
@@ -840,21 +912,21 @@ Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool
             vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                           to_string(j) + "-k" + to_string(k+1) + ".bin", scale);
             Ptxt encoded = encode(values, circuit_depth - 2, 8192);
-            k_rows.push_back(context->EvalMult(c_rotations[k], encoded));
+            k_rows.push_back(profiled_context.EvalMult(c_rotations[k], encoded));
         }
 
-        Ctxt sum = context->EvalAddMany(k_rows);
+        Ctxt sum = profiled_context.EvalAddMany(k_rows);
         if (j == 0) {
             finalsum = sum->Clone();
-            finalsum = context->EvalRotate(finalsum, -256);
+            finalsum = profiled_context.EvalRotate(finalsum, -256);
         } else {
-            finalsum = context->EvalAdd(finalsum, sum);
-            finalsum = context->EvalRotate(finalsum, -256);
+            finalsum = profiled_context.EvalAdd(finalsum, sum);
+            finalsum = profiled_context.EvalRotate(finalsum, -256);
         }
 
     }
 
-    finalsum = context->EvalAdd(finalsum, bias);
+    finalsum = profiled_context.EvalAdd(finalsum, bias);
 
     if (timing) {
         print_duration(start, "Block " + to_string(layer) + " - convbn" + to_string(n));
@@ -865,6 +937,8 @@ Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool
 
 Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer3_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer3_convbn_block_" + to_string(layer) + "_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -872,23 +946,23 @@ Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool
     int img_width = 8;
     int padding = 1;
 
-    auto digits = context->EvalFastRotationPrecompute(in);
+    auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
     //TODO: combinations of rotations in order to perform only 8 rotations
 
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), c_rotations[0]->GetLevel(), 4096);
 
@@ -901,21 +975,21 @@ Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool
             vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                           to_string(j) + "-k" + to_string(k+1) + ".bin", scale);
             Ptxt encoded = encode(values, c_rotations[0]->GetLevel(), 4096);
-            k_rows.push_back(context->EvalMult(c_rotations[k], encoded));
+            k_rows.push_back(profiled_context.EvalMult(c_rotations[k], encoded));
         }
 
-        Ctxt sum = context->EvalAddMany(k_rows);
+        Ctxt sum = profiled_context.EvalAddMany(k_rows);
         if (j == 0) {
             finalsum = sum->Clone();
-            finalsum = context->EvalRotate(finalsum, -64);
+            finalsum = profiled_context.EvalRotate(finalsum, -64);
         } else {
-            finalsum = context->EvalAdd(finalsum, sum);
-            finalsum = context->EvalRotate(finalsum, -64);
+            finalsum = profiled_context.EvalAdd(finalsum, sum);
+            finalsum = profiled_context.EvalRotate(finalsum, -64);
         }
 
     }
 
-    finalsum = context->EvalAdd(finalsum, bias);
+    finalsum = profiled_context.EvalAdd(finalsum, bias);
 
     if (timing) {
         print_duration(start, "Block" + to_string(layer) + " - convbn" + to_string(n));
@@ -926,6 +1000,8 @@ Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool
 
 vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer2_transition_main_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer2_transition_main_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -933,21 +1009,21 @@ vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, doubl
     int img_width = 32;
     int padding = 1;
 
-    auto digits = context->EvalFastRotationPrecompute(in);
+    auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
 
     vector<Ctxt> applied_filters16;
     vector<Ctxt> applied_filters32;
@@ -966,32 +1042,32 @@ vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, doubl
         for (int k = 0; k < 9; k++) {
             vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                       to_string(j) + "-k" + to_string(k+1) + ".bin", scale);
-            k_rows016.push_back(context->EvalMult(c_rotations[k], encode(values, in->GetLevel(), 16384)));
+            k_rows016.push_back(profiled_context.EvalMult(c_rotations[k], encode(values, in->GetLevel(), 16384)));
 
             values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                        to_string(j+16) + "-k" + to_string(k+1) + ".bin", scale);
-            k_rows1632.push_back(context->EvalMult(c_rotations[k], encode(values, in->GetLevel(), 16384)));
+            k_rows1632.push_back(profiled_context.EvalMult(c_rotations[k], encode(values, in->GetLevel(), 16384)));
         }
 
-        Ctxt sum016 = context->EvalAddMany(k_rows016);
-        Ctxt sum1632 = context->EvalAddMany(k_rows1632);
+        Ctxt sum016 = profiled_context.EvalAddMany(k_rows016);
+        Ctxt sum1632 = profiled_context.EvalAddMany(k_rows1632);
 
         if (j == 0) {
             finalSum016 = sum016->Clone();
-            finalSum016 = context->EvalRotate(finalSum016, -1024);
+            finalSum016 = profiled_context.EvalRotate(finalSum016, -1024);
             finalSum1632 = sum1632->Clone();
-            finalSum1632 = context->EvalRotate(finalSum1632, -1024);
+            finalSum1632 = profiled_context.EvalRotate(finalSum1632, -1024);
         } else {
-            finalSum016 = context->EvalAdd(finalSum016, sum016);
-            finalSum016 = context->EvalRotate(finalSum016, -1024);
-            finalSum1632 = context->EvalAdd(finalSum1632, sum1632);
-            finalSum1632 = context->EvalRotate(finalSum1632, -1024);
+            finalSum016 = profiled_context.EvalAdd(finalSum016, sum016);
+            finalSum016 = profiled_context.EvalRotate(finalSum016, -1024);
+            finalSum1632 = profiled_context.EvalAdd(finalSum1632, sum1632);
+            finalSum1632 = profiled_context.EvalRotate(finalSum1632, -1024);
         }
 
     }
 
-    finalSum016 = context->EvalAdd(finalSum016, bias1);
-    finalSum1632 = context->EvalAdd(finalSum1632, bias2);
+    finalSum016 = profiled_context.EvalAdd(finalSum016, bias1);
+    finalSum1632 = profiled_context.EvalAdd(finalSum1632, bias2);
 
     if (timing) {
         print_duration(start, "Block " + to_string(layer) + " - convbnSx" + to_string(n));
@@ -1002,6 +1078,8 @@ vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, doubl
 
 vector<Ctxt> FHEController::convbn1632dx(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer2_transition_skip_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer2_transition_skip_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> applied_filters16;
@@ -1019,32 +1097,32 @@ vector<Ctxt> FHEController::convbn1632dx(const Ctxt &in, int layer, int n, doubl
 
         vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "dx-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                       to_string(j) + "-k" + to_string(1) + ".bin", scale);
-        k_rows016.push_back(context->EvalMult(in, encode(values, in->GetLevel(), num_slots)));
+        k_rows016.push_back(profiled_context.EvalMult(in, encode(values, in->GetLevel(), num_slots)));
 
         values = read_values_from_file("../weights/layer" + to_string(layer) + "dx-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                        to_string(j+16) + "-k" + to_string(1) + ".bin", scale);
 
-        k_rows1632.push_back(context->EvalMult(in, encode(values, in->GetLevel(), num_slots)));
+        k_rows1632.push_back(profiled_context.EvalMult(in, encode(values, in->GetLevel(), num_slots)));
 
-        Ctxt sum016 = context->EvalAddMany(k_rows016);
-        Ctxt sum1632 = context->EvalAddMany(k_rows1632);
+        Ctxt sum016 = profiled_context.EvalAddMany(k_rows016);
+        Ctxt sum1632 = profiled_context.EvalAddMany(k_rows1632);
 
         if (j == 0) {
             finalSum016 = sum016->Clone();
-            finalSum016 = context->EvalRotate(finalSum016, -1024);
+            finalSum016 = profiled_context.EvalRotate(finalSum016, -1024);
             finalSum1632 = sum1632->Clone();
-            finalSum1632 = context->EvalRotate(finalSum1632, -1024);
+            finalSum1632 = profiled_context.EvalRotate(finalSum1632, -1024);
         } else {
-            finalSum016 = context->EvalAdd(finalSum016, sum016);
-            finalSum016 = context->EvalRotate(finalSum016, -1024);
-            finalSum1632 = context->EvalAdd(finalSum1632, sum1632);
-            finalSum1632 = context->EvalRotate(finalSum1632, -1024);
+            finalSum016 = profiled_context.EvalAdd(finalSum016, sum016);
+            finalSum016 = profiled_context.EvalRotate(finalSum016, -1024);
+            finalSum1632 = profiled_context.EvalAdd(finalSum1632, sum1632);
+            finalSum1632 = profiled_context.EvalRotate(finalSum1632, -1024);
         }
 
     }
 
-    finalSum016 = context->EvalAdd(finalSum016, bias1);
-    finalSum1632 = context->EvalAdd(finalSum1632, bias2);
+    finalSum016 = profiled_context.EvalAdd(finalSum016, bias1);
+    finalSum1632 = profiled_context.EvalAdd(finalSum1632, bias2);
 
     if (timing) {
         print_duration(start, "Block " + to_string(layer) + " - convbnDx" + to_string(n));
@@ -1055,6 +1133,8 @@ vector<Ctxt> FHEController::convbn1632dx(const Ctxt &in, int layer, int n, doubl
 
 vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer3_transition_main_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer3_transition_main_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> c_rotations;
@@ -1062,21 +1142,21 @@ vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, doubl
     int img_width = 16;
     int padding = 1;
 
-    auto digits = context->EvalFastRotationPrecompute(in);
+    auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
+    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
     c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
+            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
 
     vector<Ctxt> applied_filters32;
     vector<Ctxt> applied_filters64;
@@ -1095,32 +1175,32 @@ vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, doubl
         for (int k = 0; k < 9; k++) {
             vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                           to_string(j) + "-k" + to_string(k+1) + ".bin", scale);
-            k_rows032.push_back(context->EvalMult(c_rotations[k], encode(values, in->GetLevel(), 8192)));
+            k_rows032.push_back(profiled_context.EvalMult(c_rotations[k], encode(values, in->GetLevel(), 8192)));
 
             values = read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                            to_string(j+32) + "-k" + to_string(k+1) + ".bin", scale);
-            k_rows3264.push_back(context->EvalMult(c_rotations[k], encode(values, in->GetLevel(), 8192)));
+            k_rows3264.push_back(profiled_context.EvalMult(c_rotations[k], encode(values, in->GetLevel(), 8192)));
         }
 
-        Ctxt sum032 = context->EvalAddMany(k_rows032);
-        Ctxt sum3264 = context->EvalAddMany(k_rows3264);
+        Ctxt sum032 = profiled_context.EvalAddMany(k_rows032);
+        Ctxt sum3264 = profiled_context.EvalAddMany(k_rows3264);
 
         if (j == 0) {
             finalSum032 = sum032->Clone();
-            finalSum032 = context->EvalRotate(finalSum032, -256);
+            finalSum032 = profiled_context.EvalRotate(finalSum032, -256);
             finalSum3264 = sum3264->Clone();
-            finalSum3264 = context->EvalRotate(finalSum3264, -256);
+            finalSum3264 = profiled_context.EvalRotate(finalSum3264, -256);
         } else {
-            finalSum032 = context->EvalAdd(finalSum032, sum032);
-            finalSum032 = context->EvalRotate(finalSum032, -256);
-            finalSum3264 = context->EvalAdd(finalSum3264, sum3264);
-            finalSum3264 = context->EvalRotate(finalSum3264, -256);
+            finalSum032 = profiled_context.EvalAdd(finalSum032, sum032);
+            finalSum032 = profiled_context.EvalRotate(finalSum032, -256);
+            finalSum3264 = profiled_context.EvalAdd(finalSum3264, sum3264);
+            finalSum3264 = profiled_context.EvalRotate(finalSum3264, -256);
         }
 
     }
 
-    finalSum032 = context->EvalAdd(finalSum032, bias1);
-    finalSum3264 = context->EvalAdd(finalSum3264, bias2);
+    finalSum032 = profiled_context.EvalAdd(finalSum032, bias1);
+    finalSum3264 = profiled_context.EvalAdd(finalSum3264, bias2);
 
     if (timing) {
         print_duration(start, "Block " + to_string(layer) + " - convbnSx" + to_string(n));
@@ -1131,6 +1211,8 @@ vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, doubl
 
 vector<Ctxt> FHEController::convbn3264dx(const Ctxt &in, int layer, int n, double scale, bool timing) {
     ProfileScope profile("convolution", "layer3_transition_skip_conv_" + to_string(n));
+    ProfiledConvolutionContext profiled_context(
+        context, "layer3_transition_skip_conv_" + to_string(n));
     auto start = start_time();
 
     vector<Ctxt> applied_filters32;
@@ -1148,32 +1230,32 @@ vector<Ctxt> FHEController::convbn3264dx(const Ctxt &in, int layer, int n, doubl
 
         vector<double> values = read_values_from_file("../weights/layer" + to_string(layer) + "dx-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                                       to_string(j) + "-k" + to_string(1) + ".bin", scale);
-        k_rows032.push_back(context->EvalMult(in, encode(values, in->GetLevel(), 8192)));
+        k_rows032.push_back(profiled_context.EvalMult(in, encode(values, in->GetLevel(), 8192)));
 
         values = read_values_from_file("../weights/layer" + to_string(layer) + "dx-conv" + to_string(n) + "bn" + to_string(n) + "-ch" +
                                        to_string(j+32) + "-k" + to_string(1) + ".bin", scale);
 
-        k_rows3264.push_back(context->EvalMult(in, encode(values, in->GetLevel(), 8192)));
+        k_rows3264.push_back(profiled_context.EvalMult(in, encode(values, in->GetLevel(), 8192)));
 
-        Ctxt sum032 = context->EvalAddMany(k_rows032);
-        Ctxt sum3264 = context->EvalAddMany(k_rows3264);
+        Ctxt sum032 = profiled_context.EvalAddMany(k_rows032);
+        Ctxt sum3264 = profiled_context.EvalAddMany(k_rows3264);
 
         if (j == 0) {
             finalSum032 = sum032->Clone();
-            finalSum032 = context->EvalRotate(finalSum032, -256);
+            finalSum032 = profiled_context.EvalRotate(finalSum032, -256);
             finalSum3264 = sum3264->Clone();
-            finalSum3264 = context->EvalRotate(finalSum3264, -256);
+            finalSum3264 = profiled_context.EvalRotate(finalSum3264, -256);
         } else {
-            finalSum032 = context->EvalAdd(finalSum032, sum032);
-            finalSum032 = context->EvalRotate(finalSum032, -256);
-            finalSum3264 = context->EvalAdd(finalSum3264, sum3264);
-            finalSum3264 = context->EvalRotate(finalSum3264, -256);
+            finalSum032 = profiled_context.EvalAdd(finalSum032, sum032);
+            finalSum032 = profiled_context.EvalRotate(finalSum032, -256);
+            finalSum3264 = profiled_context.EvalAdd(finalSum3264, sum3264);
+            finalSum3264 = profiled_context.EvalRotate(finalSum3264, -256);
         }
 
     }
 
-    finalSum032 = context->EvalAdd(finalSum032, bias1);
-    finalSum3264 = context->EvalAdd(finalSum3264, bias2);
+    finalSum032 = profiled_context.EvalAdd(finalSum032, bias1);
+    finalSum3264 = profiled_context.EvalAdd(finalSum3264, bias2);
 
     if (timing) {
         print_duration(start, "Block " + to_string(layer) + " - convbnDx" + to_string(n));

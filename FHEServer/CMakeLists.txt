@@ -22,3 +22,18 @@ add_executable(FHEServer
         src/Profiler.cpp
         src/Profiler.h
         src/Utils.h)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(FHEServerProfilerSmokeTest
+            tests/ProfilerSmokeTest.cpp
+            src/Profiler.cpp
+            src/Profiler.h)
+    target_include_directories(FHEServerProfilerSmokeTest PRIVATE src)
+    add_test(NAME FHEServerProfilerSmokeTest
+            COMMAND FHEServerProfilerSmokeTest
+                    ${CMAKE_CURRENT_BINARY_DIR}/profiler-smoke-report)
+    add_test(NAME FHEServerProfilerDisabledTest
+            COMMAND FHEServerProfilerSmokeTest
+                    ${CMAKE_CURRENT_BINARY_DIR}/profiler-disabled-report disabled)
+endif()

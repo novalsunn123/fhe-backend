@@ -31,6 +31,9 @@ public:
     bool enabled() const;
     std::uint64_t nextSequence();
     void record(ProfileEvent event);
+    void recordDuration(const std::string& event_type, const std::string& event_name,
+                        double duration_seconds, const std::string& file = "",
+                        bool include_file_size = false);
     void finalize(const std::string& status, const std::string& error_summary = "");
 
     void setContext(const std::string& layer, const std::string& block);
