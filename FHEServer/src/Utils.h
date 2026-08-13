@@ -5,8 +5,17 @@
 #ifndef LOWMEMORYFHERESNET20_UTILS_H
 #define LOWMEMORYFHERESNET20_UTILS_H
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <openfhe.h>
+#include <sstream>
+
+#include "PackedWeights.h"
+#include "Profiler.h"
 
 #define YELLOW_TEXT "\033[1;33m"
 #define RESET_COLOR "\033[0m"
@@ -17,6 +26,45 @@ using namespace std::chrono;
 using namespace lbcrypto;
 
 namespace utils {
+
+    enum class BinaryWeightMode { Auto, Disabled, Required };
+
+    static inline BinaryWeightMode binary_weight_mode() {
+        const char* setting = std::getenv("FHE_BINARY_WEIGHTS");
+        if (!setting || string(setting).empty() || string(setting) == "auto") {
+            return BinaryWeightMode::Auto;
+        }
+        const string value(setting);
+        if (value == "0" || value == "false" || value == "off") return BinaryWeightMode::Disabled;
+        if (value == "1" || value == "true" || value == "on") return BinaryWeightMode::Required;
+        throw runtime_error("FHE_BINARY_WEIGHTS must be auto, 0, or 1");
+    }
+
+    static inline string packed_weight_path() {
+        const char* configured = std::getenv("FHE_PACKED_WEIGHTS");
+        return configured && *configured ? string(configured) : string("packed-weights.bin");
+    }
+
+    static inline packed_weights::Archive* packed_weight_archive() {
+        static once_flag initialized;
+        static unique_ptr<packed_weights::Archive> archive;
+        static exception_ptr initialization_error;
+        call_once(initialized, [] {
+            try {
+                archive = std::make_unique<packed_weights::Archive>(packed_weight_path());
+            } catch (...) {
+                initialization_error = current_exception();
+            }
+        });
+        if (!archive && binary_weight_mode() == BinaryWeightMode::Required) {
+            rethrow_exception(initialization_error);
+        }
+        return archive.get();
+    }
+
+    static inline string weight_entry_name(const string& filename) {
+        return filesystem::path(filename).filename().string();
+    }
 
     static inline chrono::time_point<steady_clock, nanoseconds> start_time() {
         return steady_clock::now();
@@ -71,7 +119,32 @@ namespace utils {
 
     static inline vector<double> read_values_from_file(const string& filename, double scale = 1) {
         vector<double> values;
+        const bool profile_weights = OperationProfiler::instance().enabled() &&
+                                     (filename.find("/weights/") != string::npos ||
+                                      filename.rfind("../weights/", 0) == 0);
+        if (binary_weight_mode() != BinaryWeightMode::Disabled) {
+            const auto binary_started = steady_clock::now();
+            if (auto* archive = packed_weight_archive()) {
+                values = archive->read(weight_entry_name(filename));
+                if (scale != 1.0) {
+                    for (double& value : values) value *= scale;
+                }
+                if (profile_weights) {
+                    OperationProfiler::instance().recordDuration(
+                        "weight_binary_read", "read_packed_weight",
+                        duration<double>(steady_clock::now() - binary_started).count(), filename);
+                }
+                return values;
+            }
+        }
+        steady_clock::time_point open_started;
+        if (profile_weights) open_started = steady_clock::now();
         ifstream file(filename);
+        if (profile_weights) {
+            OperationProfiler::instance().recordDuration(
+                "weight_file_open", "open_weight_file",
+                duration<double>(steady_clock::now() - open_started).count(), filename, true);
+        }
 
         if (!file.is_open()) {
             std::cerr << "Can not open " << filename << std::endl;
@@ -79,7 +152,19 @@ namespace utils {
         }
 
         string row;
-        while (std::getline(file, row)) {
+        double read_seconds = 0.0;
+        double parse_seconds = 0.0;
+        while (true) {
+            steady_clock::time_point read_started;
+            if (profile_weights) read_started = steady_clock::now();
+            const bool has_row = static_cast<bool>(std::getline(file, row));
+            if (profile_weights) {
+                read_seconds += duration<double>(steady_clock::now() - read_started).count();
+            }
+            if (!has_row) break;
+
+            steady_clock::time_point parse_started;
+            if (profile_weights) parse_started = steady_clock::now();
             istringstream stream(row);
             string value;
             while (std::getline(stream, value, ',')) {
@@ -91,6 +176,15 @@ namespace utils {
                     cerr << "Can not convert: " << value << endl;
                 }
             }
+            if (profile_weights) {
+                parse_seconds += duration<double>(steady_clock::now() - parse_started).count();
+            }
+        }
+        if (profile_weights) {
+            OperationProfiler::instance().recordDuration(
+                "weight_file_read", "read_weight_file", read_seconds, filename);
+            OperationProfiler::instance().recordDuration(
+                "weight_text_parse", "parse_weight_text", parse_seconds, filename);
         }
 
         file.close();

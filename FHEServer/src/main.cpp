@@ -1,7 +1,9 @@
 #include <iostream>
 #include <filesystem>
+#include <stdexcept>
 
 #include "FHEController.h"
+#include "Profiler.h"
 
 #define GREEN_TEXT "\033[1;32m"
 #define RED_TEXT "\033[1;31m"
@@ -35,10 +37,25 @@ int main(int argc, char *argv[]) {
     //TODO: possibile che il bootstrap a 8192 ci metta lo stesso tempo? indaga
 
     check_arguments(argc, argv);
-
-    controller.load_server_context(verbose > 1);
-
-    executeResNet20();
+    OperationProfiler& profiler = OperationProfiler::instance();
+    try {
+        profiler.configureFromEnvironment();
+        {
+            ProfileScope total_profile("pipeline", "total_infer_command", "pipeline", "");
+            controller.load_server_context(verbose > 1);
+            executeResNet20();
+        }
+        profiler.finalize("passed");
+        return 0;
+    } catch (const std::exception& error) {
+        try {
+            profiler.finalize("failed", error.what());
+        } catch (const std::exception& report_error) {
+            cerr << "Profiler report failure: " << report_error.what() << endl;
+        }
+        cerr << error.what() << endl;
+        return 1;
+    }
 }
 
 void executeResNet20() {
@@ -52,9 +69,13 @@ void executeResNet20() {
     const bool print_bootstrap_precision = false;
 
     Ctxt in;
-    if (!Serial::DeserializeFromFile(input_filename, in, SerType::BINARY)) {
-        cerr << "Cannot deserialize encrypted input: " << input_filename << endl;
-        exit(1);
+    {
+        ProfileScope profile("io", "encrypted_input_deserialization", "pipeline", "");
+        profile.setFile(input_filename);
+        if (!Serial::DeserializeFromFile(input_filename, in, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Cannot deserialize encrypted input: " + input_filename);
+        }
     }
 
     controller.load_bootstrapping_and_rotation_keys("rotations-layer1.bin", 16384, verbose > 1);
@@ -64,6 +85,7 @@ void executeResNet20() {
     }
 
     auto start = start_time();
+    ProfileScope circuit_profile("pipeline", "fhe_circuit", "pipeline", "");
 
     firstLayer = initial_layer(in);
     if (print_intermediate_values) controller.print(firstLayer, 16384, "Initial layer: ");
@@ -72,8 +94,11 @@ void executeResNet20() {
      * Layer 1: 16 channels of 32x32
      */
     auto startLayer = start_time();
-    resLayer1 = layer1(firstLayer);
-    Serial::SerializeToFile("../checkpoints/layer1.bin", resLayer1, SerType::BINARY);
+    {
+        ProfileScope layer_profile("layer", "layer_1", "Layer 1", "");
+        resLayer1 = layer1(firstLayer);
+        Serial::SerializeToFile("../checkpoints/layer1.bin", resLayer1, SerType::BINARY);
+    }
     if (print_intermediate_values) controller.print(resLayer1, 16384, "Layer 1: ");
     if (verbose > 0) print_duration(startLayer, "Layer 1 took:");
 
@@ -81,9 +106,12 @@ void executeResNet20() {
      * Layer 2: 32 channels of 16x16
      */
     startLayer = start_time();
-    Serial::DeserializeFromFile("../checkpoints/layer1.bin", resLayer1, SerType::BINARY);
-    resLayer2 = layer2(resLayer1);
-    Serial::SerializeToFile("../checkpoints/layer2.bin", resLayer2, SerType::BINARY);
+    {
+        ProfileScope layer_profile("layer", "layer_2", "Layer 2", "");
+        Serial::DeserializeFromFile("../checkpoints/layer1.bin", resLayer1, SerType::BINARY);
+        resLayer2 = layer2(resLayer1);
+        Serial::SerializeToFile("../checkpoints/layer2.bin", resLayer2, SerType::BINARY);
+    }
     if (print_intermediate_values) controller.print(resLayer2, 8192, "Layer 2: ");
     if (verbose > 0) print_duration(startLayer, "Layer 2 took:");
 
@@ -91,9 +119,12 @@ void executeResNet20() {
      * Layer 2: 64 channels of 8x8
      */
     startLayer = start_time();
-    Serial::DeserializeFromFile("../checkpoints/layer2.bin", resLayer2, SerType::BINARY);
-    resLayer3 = layer3(resLayer2);
-    Serial::SerializeToFile("../checkpoints/layer3.bin", resLayer3, SerType::BINARY);
+    {
+        ProfileScope layer_profile("layer", "layer_3", "Layer 3", "");
+        Serial::DeserializeFromFile("../checkpoints/layer2.bin", resLayer2, SerType::BINARY);
+        resLayer3 = layer3(resLayer2);
+        Serial::SerializeToFile("../checkpoints/layer3.bin", resLayer3, SerType::BINARY);
+    }
     if (print_intermediate_values) controller.print(resLayer3, 4096, "Layer 3: ");
     if (verbose > 0) print_duration(startLayer, "Layer 3 took:");
 
@@ -102,9 +133,14 @@ void executeResNet20() {
     finalRes = final_layer(resLayer3);
     const auto output_parent = std::filesystem::path(output_filename).parent_path();
     if (!output_parent.empty()) std::filesystem::create_directories(output_parent);
-    if (!Serial::SerializeToFile(output_filename, finalRes, SerType::BINARY)) {
-        cerr << "Cannot serialize encrypted result: " << output_filename << endl;
-        exit(1);
+    {
+        ProfileScope profile("io", "result_serialization", "Final", "");
+        profile.setFile(output_filename);
+        if (!Serial::SerializeToFile(output_filename, finalRes, SerType::BINARY)) {
+            profile.fail();
+            throw runtime_error("Cannot serialize encrypted result: " + output_filename);
+        }
+        profile.setFile(output_filename);
     }
     cout << "Encrypted result saved to " << output_filename << endl;
 
@@ -112,6 +148,8 @@ void executeResNet20() {
 }
 
 Ctxt initial_layer(const Ctxt& in) {
+    ProfileContextScope context("Initial", "");
+    ProfileScope layer_profile("layer", "initial_layer", "Initial", "");
     double scale = 0.90;
 
     Ctxt res = controller.convbn_initial(in, scale, verbose > 1);
@@ -121,6 +159,8 @@ Ctxt initial_layer(const Ctxt& in) {
 }
 
 Ctxt final_layer(const Ctxt& in) {
+    ProfileContextScope context("Final", "");
+    ProfileScope layer_profile("layer", "final_layer", "Final", "");
     controller.clear_bootstrapping_and_rotation_keys(4096);
     controller.load_rotation_keys("rotations-finallayer.bin", false);
 
@@ -148,6 +188,8 @@ Ctxt layer3(const Ctxt& in) {
     bool timing = verbose > 1;
 
     if (verbose > 1) cout << "---Start: Layer3 - Block 1---" << endl;
+    ProfileContextScope block1_context("Layer 3", "Block 1");
+    ProfileScope block1_profile("block", "layer_3_block_1", "Layer 3", "Block 1");
     auto start = start_time();
     Ctxt boot_in = controller.bootstrap(in, timing);
 
@@ -171,16 +213,24 @@ Ctxt layer3(const Ctxt& in) {
 
     fullpackSx = controller.relu(fullpackSx, scaleSx, timing);
     fullpackSx = controller.convbn3(fullpackSx, 7, 2, scaleDx, timing);
-    Ctxt res1 = controller.add(fullpackSx, fullpackDx);
+    Ctxt res1;
+    {
+        ProfileScope residual_profile("residual", "layer_3_block_1_residual_add");
+        res1 = controller.add(fullpackSx, fullpackDx);
+    }
     res1 = controller.bootstrap(res1, timing);
     res1 = controller.relu(res1, scaleDx, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer3 - Block 1---" << endl;
+    block1_profile.finish();
+    block1_context.restore();
 
     double scale = 0.57;
 
 
     if (verbose > 1) cout << "---Start: Layer3 - Block 2---" << endl;
+    ProfileContextScope block2_context("Layer 3", "Block 2");
+    ProfileScope block2_profile("block", "layer_3_block_2", "Layer 3", "Block 2");
     start = start_time();
     Ctxt res2;
     res2 = controller.convbn3(res1, 8, 1, scale, timing);
@@ -190,15 +240,22 @@ Ctxt layer3(const Ctxt& in) {
     scale = 0.33;
 
     res2 = controller.convbn3(res2, 8, 2, scale, timing);
-    res2 = controller.add(res2, controller.mult(res1, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_3_block_2_residual_add");
+        res2 = controller.add(res2, controller.mult(res1, scale));
+    }
     res2 = controller.bootstrap(res2, timing);
     res2 = controller.relu(res2, scale, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer3 - Block 2---" << endl;
+    block2_profile.finish();
+    block2_context.restore();
 
     scale = 0.69;
 
     if (verbose > 1) cout << "---Start: Layer3 - Block 3---" << endl;
+    ProfileContextScope block3_context("Layer 3", "Block 3");
+    ProfileScope block3_profile("block", "layer_3_block_3", "Layer 3", "Block 3");
     start = start_time();
     Ctxt res3;
 
@@ -209,13 +266,18 @@ Ctxt layer3(const Ctxt& in) {
     scale = 0.1;
 
     res3 = controller.convbn3(res3, 9, 2, scale, timing);
-    res3 = controller.add(res3, controller.mult(res2, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_3_block_3_residual_add");
+        res3 = controller.add(res3, controller.mult(res2, scale));
+    }
     res3 = controller.bootstrap(res3, timing);
     res3 = controller.relu(res3, scale, timing);
     res3 = controller.bootstrap(res3, timing);
 
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer3 - Block 3---" << endl;
+    block3_profile.finish();
+    block3_context.restore();
 
 
     return res3;
@@ -230,6 +292,8 @@ Ctxt layer2(const Ctxt& in) {
     bool timing = verbose > 1;
 
     if (verbose > 1) cout << "---Start: Layer2 - Block 1---" << endl;
+    ProfileContextScope block1_context("Layer 2", "Block 1");
+    ProfileScope block1_profile("block", "layer_2_block_1", "Layer 2", "Block 1");
     auto start = start_time();
     Ctxt boot_in = controller.bootstrap(in, timing);
 
@@ -258,15 +322,23 @@ Ctxt layer2(const Ctxt& in) {
 
     //I use the scale of the right branch since they will be added together
     fullpackSx = controller.convbn2(fullpackSx, 4, 2, scaleDx, timing);
-    Ctxt res1 = controller.add(fullpackSx, fullpackDx);
+    Ctxt res1;
+    {
+        ProfileScope residual_profile("residual", "layer_2_block_1_residual_add");
+        res1 = controller.add(fullpackSx, fullpackDx);
+    }
     res1 = controller.bootstrap(res1, timing);
     res1 = controller.relu(res1, scaleDx, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer2 - Block 1---" << endl;
+    block1_profile.finish();
+    block1_context.restore();
 
     double scale = 0.76;
 
     if (verbose > 1) cout << "---Start: Layer2 - Block 2---" << endl;
+    ProfileContextScope block2_context("Layer 2", "Block 2");
+    ProfileScope block2_profile("block", "layer_2_block_2", "Layer 2", "Block 2");
     start = start_time();
     Ctxt res2;
     res2 = controller.convbn2(res1, 5, 1, scale, timing);
@@ -276,15 +348,22 @@ Ctxt layer2(const Ctxt& in) {
     scale = 0.37;
 
     res2 = controller.convbn2(res2, 5, 2, scale, timing);
-    res2 = controller.add(res2, controller.mult(res1, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_2_block_2_residual_add");
+        res2 = controller.add(res2, controller.mult(res1, scale));
+    }
     res2 = controller.bootstrap(res2, timing);
     res2 = controller.relu(res2, scale, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer2 - Block 2---" << endl;
+    block2_profile.finish();
+    block2_context.restore();
 
     scale = 0.63;
 
     if (verbose > 1) cout << "---Start: Layer2 - Block 3---" << endl;
+    ProfileContextScope block3_context("Layer 2", "Block 3");
+    ProfileScope block3_profile("block", "layer_2_block_3", "Layer 2", "Block 3");
     start = start_time();
     Ctxt res3;
     res3 = controller.convbn2(res2, 6, 1, scale, timing);
@@ -294,11 +373,16 @@ Ctxt layer2(const Ctxt& in) {
     scale = 0.25;
 
     res3 = controller.convbn2(res3, 6, 2, scale, timing);
-    res3 = controller.add(res3, controller.mult(res2, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_2_block_3_residual_add");
+        res3 = controller.add(res3, controller.mult(res2, scale));
+    }
     res3 = controller.bootstrap(res3, timing);
     res3 = controller.relu(res3, scale, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer2 - Block 3---" << endl;
+    block3_profile.finish();
+    block3_context.restore();
 
     return res3;
 }
@@ -309,6 +393,8 @@ Ctxt layer1(const Ctxt& in) {
 
 
     if (verbose > 1) cout << "---Start: Layer1 - Block 1---" << endl;
+    ProfileContextScope block1_context("Layer 1", "Block 1");
+    ProfileScope block1_profile("block", "layer_1_block_1", "Layer 1", "Block 1");
     auto start = start_time();
     Ctxt res1;
     res1 = controller.convbn(in, 1, 1, scale, timing);
@@ -318,16 +404,23 @@ Ctxt layer1(const Ctxt& in) {
     scale = 0.52;
 
     res1 = controller.convbn(res1, 1, 2, scale, timing);
-    res1 = controller.add(res1, controller.mult(in, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_1_block_1_residual_add");
+        res1 = controller.add(res1, controller.mult(in, scale));
+    }
     res1 = controller.bootstrap(res1, timing);
     res1 = controller.relu(res1, scale, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer1 - Block 1---" << endl;
+    block1_profile.finish();
+    block1_context.restore();
 
     scale = 0.55;
 
 
     if (verbose > 1) cout << "---Start: Layer1 - Block 2---" << endl;
+    ProfileContextScope block2_context("Layer 1", "Block 2");
+    ProfileScope block2_profile("block", "layer_1_block_2", "Layer 1", "Block 2");
     start = start_time();
     Ctxt res2;
     res2 = controller.convbn(res1, 2, 1, scale, timing);
@@ -337,15 +430,22 @@ Ctxt layer1(const Ctxt& in) {
     scale = 0.36;
 
     res2 = controller.convbn(res2, 2, 2, scale, timing);
-    res2 = controller.add(res2, controller.mult(res1, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_1_block_2_residual_add");
+        res2 = controller.add(res2, controller.mult(res1, scale));
+    }
     res2 = controller.bootstrap(res2, timing);
     res2 = controller.relu(res2, scale, timing);
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer1 - Block 2---" << endl;
+    block2_profile.finish();
+    block2_context.restore();
   
     scale = 0.63;
 
     if (verbose > 1) cout << "---Start: Layer1 - Block 3---" << endl;
+    ProfileContextScope block3_context("Layer 1", "Block 3");
+    ProfileScope block3_profile("block", "layer_1_block_3", "Layer 1", "Block 3");
     start = start_time();
     Ctxt res3;
     res3 = controller.convbn(res2, 3, 1, scale, timing);
@@ -355,12 +455,17 @@ Ctxt layer1(const Ctxt& in) {
     scale = 0.42;
   
     res3 = controller.convbn(res3, 3, 2, scale, timing);
-    res3 = controller.add(res3, controller.mult(res2, scale));
+    {
+        ProfileScope residual_profile("residual", "layer_1_block_3_residual_add");
+        res3 = controller.add(res3, controller.mult(res2, scale));
+    }
     res3 = controller.bootstrap(res3, timing);
     res3 = controller.relu(res3, scale, timing);
 
     if (verbose > 1) print_duration(start, "Total");
     if (verbose > 1) cout << "---End  : Layer1 - Block 3---" << endl;
+    block3_profile.finish();
+    block3_context.restore();
 
     return res3;
 }
