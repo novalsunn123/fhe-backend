@@ -100,7 +100,7 @@ struct OperationSummary {
 
 const std::vector<std::string>& convolutionOperationTypes() {
     static const std::vector<std::string> types = {
-        "weight_file_open", "weight_file_read", "weight_text_parse",
+        "weight_file_open", "weight_file_read", "weight_text_parse", "weight_binary_read",
         "plaintext_encode", "rotation_precompute", "fast_rotation",
         "rotation", "eval_mult_plain", "eval_add", "eval_add_many"
     };

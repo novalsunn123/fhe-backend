@@ -20,6 +20,17 @@ Return `encrypted-result.bin` to the client. The server does not decrypt it.
 duplicating about 1.3 GB. Replace the symlink with a copied `weights/` directory
 when deploying the server to another machine.
 
+## Packed binary weights
+
+The Release build packs all text files under `weights/` into
+`build/packed-weights.bin`. FHEServer reads that indexed binary archive by
+default, avoiding thousands of text-file opens and numeric conversions during
+the FHE circuit. The generated archive is build output and is not committed.
+
+Use `FHE_BINARY_WEIGHTS=0` to retain the legacy text reader for comparison.
+Use `FHE_BINARY_WEIGHTS=1` to require the archive and fail instead of falling
+back. `FHE_PACKED_WEIGHTS=/path/to/archive.bin` overrides the default archive.
+
 ## Operation profiler
 
 FHEServer can emit context/key-loading, layer, residual-block, convolution,

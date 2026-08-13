@@ -19,9 +19,34 @@ add_executable(FHEServer
         src/main.cpp
         src/FHEController.cpp
         src/FHEController.h
+        src/PackedWeights.cpp
+        src/PackedWeights.h
         src/Profiler.cpp
         src/Profiler.h
         src/Utils.h)
+
+add_executable(FHEWeightPacker
+        tools/PackWeights.cpp
+        src/PackedWeights.cpp
+        src/PackedWeights.h)
+target_include_directories(FHEWeightPacker PRIVATE src)
+
+set(PACKED_WEIGHTS_FILE "${CMAKE_CURRENT_BINARY_DIR}/packed-weights.bin")
+file(GLOB TEXT_WEIGHT_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/weights/*.bin")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/weights/fc.bin")
+    add_custom_command(
+            OUTPUT "${PACKED_WEIGHTS_FILE}"
+            COMMAND $<TARGET_FILE:FHEWeightPacker>
+                    "${CMAKE_CURRENT_SOURCE_DIR}/weights"
+                    "${PACKED_WEIGHTS_FILE}"
+            DEPENDS FHEWeightPacker ${TEXT_WEIGHT_FILES}
+            COMMENT "Packing text model weights into one binary archive"
+            VERBATIM)
+    add_custom_target(FHEServerPackedWeights ALL DEPENDS "${PACKED_WEIGHTS_FILE}")
+    add_dependencies(FHEServer FHEServerPackedWeights)
+else()
+    message(WARNING "FHEServer/weights is unavailable; binary weight archive will not be generated")
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -36,4 +61,13 @@ if(BUILD_TESTING)
     add_test(NAME FHEServerProfilerDisabledTest
             COMMAND FHEServerProfilerSmokeTest
                     ${CMAKE_CURRENT_BINARY_DIR}/profiler-disabled-report disabled)
+
+    add_executable(FHEServerPackedWeightsTest
+            tests/PackedWeightsTest.cpp
+            src/PackedWeights.cpp
+            src/PackedWeights.h)
+    target_include_directories(FHEServerPackedWeightsTest PRIVATE src)
+    add_test(NAME FHEServerPackedWeightsTest
+            COMMAND FHEServerPackedWeightsTest
+                    ${CMAKE_CURRENT_BINARY_DIR}/packed-weights-test)
 endif()
