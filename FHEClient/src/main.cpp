@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "FHEController.h"
+#include "RotationKeySchedule.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -87,17 +88,34 @@ void generate_keys(const std::string& experiment) {
     if (id == 3) controller.generate_context(16, 50, 46, 3, 5, 4, 119, true);
     if (id == 4) controller.generate_context(16, 48, 44, 2, 4, 4, 59, true);
 
-    controller.generate_bootstrapping_and_rotation_keys({1, -1, 32, -32, -1024, 1024}, 16384, true, "rotations-layer1.bin");
+    const auto& layer1_keys = fhe_rotation_keys::find("rotations-layer1.bin");
+    controller.generate_bootstrapping_and_rotation_keys(
+        layer1_keys.application_rotations, layer1_keys.bootstrap_slots, true,
+        layer1_keys.filename);
     controller.clear_context(16384); controller.load_context(false);
-    controller.generate_rotation_keys({1, 2, 4, 8, 48, -768, 24576, -8192}, true, "rotations-layer2-downsample.bin");
+    const auto& layer2_downsample_keys =
+        fhe_rotation_keys::find("rotations-layer2-downsample.bin");
+    controller.generate_rotation_keys(layer2_downsample_keys.application_rotations, true,
+                                      layer2_downsample_keys.filename);
     controller.clear_context(0); controller.load_context(false);
-    controller.generate_bootstrapping_and_rotation_keys({1, -1, 16, -16, -256}, 8192, true, "rotations-layer2.bin");
+    const auto& layer2_keys = fhe_rotation_keys::find("rotations-layer2.bin");
+    controller.generate_bootstrapping_and_rotation_keys(
+        layer2_keys.application_rotations, layer2_keys.bootstrap_slots, true,
+        layer2_keys.filename);
     controller.clear_context(8192); controller.load_context(false);
-    controller.generate_rotation_keys({1, 2, 4, 24, -192, 12288, -4096}, true, "rotations-layer3-downsample.bin");
+    const auto& layer3_downsample_keys =
+        fhe_rotation_keys::find("rotations-layer3-downsample.bin");
+    controller.generate_rotation_keys(layer3_downsample_keys.application_rotations, true,
+                                      layer3_downsample_keys.filename);
     controller.clear_context(0); controller.load_context(false);
-    controller.generate_bootstrapping_and_rotation_keys({1, -1, 8, -8, -64}, 4096, true, "rotations-layer3.bin");
+    const auto& layer3_keys = fhe_rotation_keys::find("rotations-layer3.bin");
+    controller.generate_bootstrapping_and_rotation_keys(
+        layer3_keys.application_rotations, layer3_keys.bootstrap_slots, true,
+        layer3_keys.filename);
     controller.clear_context(4096); controller.load_context(false);
-    controller.generate_rotation_keys({1, 2, 4, 8, 16, 32, -15, 64, 128, 256, 512, 1024, 2048}, true, "rotations-finallayer.bin");
+    const auto& final_keys = fhe_rotation_keys::find("rotations-finallayer.bin");
+    controller.generate_rotation_keys(final_keys.application_rotations, true,
+                                      final_keys.filename);
 
     const std::string server_folder = "server_keys_exp" + experiment;
     export_server_keys(folder, server_folder);
@@ -109,12 +127,16 @@ void regenerate_server_keys(const std::string& experiment) {
     const std::string folder = key_folder(experiment);
     controller.parameters_folder = folder;
     controller.load_context(false);
+    const auto& layer1_keys = fhe_rotation_keys::find("rotations-layer1.bin");
     controller.generate_bootstrapping_and_rotation_keys(
-        {1, -1, 32, -32, -1024, 1024}, 16384, true, "rotations-layer1.bin");
+        layer1_keys.application_rotations, layer1_keys.bootstrap_slots, true,
+        layer1_keys.filename);
     controller.clear_context(16384);
     controller.load_context(false);
-    controller.generate_rotation_keys(
-        {1, 2, 4, 8, 48, -768, 24576, -8192}, true, "rotations-layer2-downsample.bin");
+    const auto& layer2_downsample_keys =
+        fhe_rotation_keys::find("rotations-layer2-downsample.bin");
+    controller.generate_rotation_keys(layer2_downsample_keys.application_rotations, true,
+                                      layer2_downsample_keys.filename);
     export_server_keys(folder, "server_keys_exp" + experiment);
     std::cout << "Required server evaluation keys regenerated.\n";
 }

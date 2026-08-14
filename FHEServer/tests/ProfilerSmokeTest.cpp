@@ -55,7 +55,11 @@ int main(int argc, char* argv[]) {
     profiler.recordDuration("plaintext_encode", "encode_vector_plaintext", 0.030);
     profiler.recordDuration("rotation_precompute", "rotation_precompute", 0.040);
     profiler.recordDuration("fast_rotation", "fast_rotation", 0.050);
-    profiler.recordDuration("rotation", "rotation", 0.060);
+    profiler.setRotationKeySet("rotations-layer1.bin");
+    {
+        ProfileScope rotation("rotation", "rotation");
+        rotation.setRotationIndex(1);
+    }
     profiler.recordDuration("eval_mult_plain", "eval_mult_plain", 0.070);
     profiler.recordDuration("eval_add", "eval_add", 0.080);
     profiler.recordDuration("eval_add_many", "eval_add_many", 0.090);
@@ -66,11 +70,16 @@ int main(int argc, char* argv[]) {
     const std::string csv = readFile(output_directory / "fhe-operation-events.csv");
 
     const bool valid =
-        contains(json, "\"schema_version\": 2") &&
+        contains(json, "\"schema_version\": 3") &&
         contains(json, "\"convolution_operation_summary\"") &&
+        contains(json, "\"rotation_usage_summary\"") &&
+        contains(json, "\"rotation_index\": 1") &&
         contains(json, "\"fast_rotation\": {\"count\": 1") &&
         contains(markdown, "## Convolution operation breakdown") &&
+        contains(markdown, "## Application rotation-key audit") &&
+        contains(markdown, "| rotations-layer1.bin | rotation | 1 | 1 |") &&
         contains(markdown, "| eval_mult_plain | 1 |") &&
+        contains(csv, "rotation_index,rotation_key_set") &&
         contains(csv, "weight_text_parse,parse_weight_text,Layer test,Block test");
     return valid ? 0 : 1;
 }

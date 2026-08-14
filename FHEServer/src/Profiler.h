@@ -19,6 +19,8 @@ struct ProfileEvent {
     std::optional<std::uint32_t> slots;
     std::optional<std::uint32_t> level_before;
     std::optional<std::uint32_t> level_after;
+    std::optional<std::int32_t> rotation_index;
+    std::string rotation_key_set;
     std::string file;
     std::optional<std::uintmax_t> file_size_bytes;
 };
@@ -37,8 +39,10 @@ public:
     void finalize(const std::string& status, const std::string& error_summary = "");
 
     void setContext(const std::string& layer, const std::string& block);
+    void setRotationKeySet(const std::string& key_set);
     std::string currentLayer() const;
     std::string currentBlock() const;
+    std::string currentRotationKeySet() const;
 
 private:
     OperationProfiler() = default;
@@ -85,6 +89,7 @@ public:
     void setSlots(std::uint32_t slots);
     void setLevelBefore(std::uint32_t level);
     void setLevelAfter(std::uint32_t level);
+    void setRotationIndex(std::int32_t index);
     void setFile(const std::string& file);
     void fail();
     void finish();
