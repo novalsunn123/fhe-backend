@@ -57,6 +57,11 @@ ciphertexts are removed on exit. Because ten sequential inferences take about
 two hours on the current 12-core runner, this workflow has a separate 240-minute
 timeout while sharing the global `fhe-benchmark` concurrency group.
 
+Before the initial baseline is merged, the workflow also accepts pushes from
+the exact bootstrap branch `agent/rotation-key-audit`. That branch run uploads
+the same report but cannot update `dev-batch10-baseline.json`; only a successful
+run whose ref is exactly `refs/heads/dev` installs the comparison baseline.
+
 ## Agent performance review
 
 Ordinary agent work uses an `agent/<task-slug>` branch and a pull request into

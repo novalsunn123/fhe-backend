@@ -1,9 +1,10 @@
-name: Dev FHE sequential 10-image baseline
+name: FHE sequential 10-image benchmark
 
 on:
   push:
     branches:
       - dev
+      - agent/rotation-key-audit
 
 permissions:
   contents: read
@@ -14,7 +15,9 @@ concurrency:
 
 jobs:
   benchmark:
-    if: github.ref == 'refs/heads/dev'
+    if: >-
+      github.ref == 'refs/heads/dev' ||
+      github.ref == 'refs/heads/agent/rotation-key-audit'
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 240
     env:
@@ -39,6 +42,7 @@ jobs:
         run: ./CICD/run_batch10_baseline.sh
 
       - name: Update successful batch baseline
+        if: github.ref == 'refs/heads/dev'
         run: |
           jq -e --arg sha "${{ github.sha }}" \
             '.status == "passed" and .commit == $sha and
