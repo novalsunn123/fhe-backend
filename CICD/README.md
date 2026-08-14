@@ -55,7 +55,9 @@ A successful `dev` run writes the external baseline to
 `/home/fhe-runner/CICD/state/dev-batch10-baseline.json`. Generated keys and
 ciphertexts are removed on exit. Because ten sequential inferences take about
 two hours on the current 12-core runner, this workflow has a separate 240-minute
-timeout while sharing the global `fhe-benchmark` concurrency group.
+timeout and its own `fhe-benchmark-batch10` concurrency group. The machine has
+one self-hosted runner, so batch and single-image jobs remain sequential, while
+new pull-request events can no longer replace a pending batch run.
 
 Before the initial baseline is merged, the workflow also accepts pushes from
 the exact bootstrap branch `agent/rotation-key-audit`. That branch run uploads

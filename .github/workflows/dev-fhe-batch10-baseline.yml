@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: fhe-benchmark
+  group: fhe-benchmark-batch10
   cancel-in-progress: false
 
 jobs:
