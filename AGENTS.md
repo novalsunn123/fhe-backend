@@ -20,9 +20,9 @@ Use `CICD/agent_start.sh` to create the task branch and
 Every submission must provide a change-note Markdown file with the exact
 headings `## Đã sửa gì`, `## Cơ chế`, `## Cách hoạt động`, and
 `## Lợi ích`. Write concrete behavior and user impact under every heading;
-this note becomes the permanent dev-version entry only after promotion.
+this note becomes the pull-request description used during manual review.
 
-The candidate must pass the trusted FHE performance gate against the most
-recent successful `dev` baseline. Only the promotion job may squash-merge an
-eligible pull request. A rejected or incomparable candidate remains outside
-`dev`; never bypass the gate with a force push.
+The candidate must complete the trusted FHE benchmark against the most recent
+successful `dev` baseline. The report is for manual review only: agents and CI
+must never merge or push directly to `dev`. Only the user may decide to merge a
+comparable pull request after reading its results; never use a force push.

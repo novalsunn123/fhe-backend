@@ -104,4 +104,5 @@ created_pr="$(curl --fail-with-body --silent --show-error --location \
     --data "$payload")"
 
 echo "Pull request created: $(jq -r '.html_url' <<< "$created_pr")"
-echo "The self-hosted FHE performance gate will now run automatically."
+echo "The self-hosted FHE benchmark will now run automatically."
+echo "Review its report and merge the pull request manually if you accept the result."

@@ -33,7 +33,7 @@ already running, when available RAM or disk is below the safety threshold, or
 when decryption fails. Jobs are serialized and are not automatically canceled
 so key-generation cleanup can finish.
 
-## Agent performance promotion
+## Agent performance review
 
 Ordinary agent work uses an `agent/<task-slug>` branch and a pull request into
 `dev`. `agent-performance-gate.yml` executes the candidate with benchmark tools
@@ -41,39 +41,23 @@ from the trusted base commit, compares its machine-readable `benchmark.json`
 against `/home/fhe-runner/CICD/state/dev-baseline.json`, and keeps write access
 out of the benchmark job.
 
-The gate has four outcomes:
+The comparison has two outcomes:
 
-- `auto_merge`: at least one primary metric improved and all regressions or
-  speed/memory trade-offs are within policy;
-- `manual_review`: correctness passed, but the change is stable without a
-  primary improvement or has a trade-off outside automatic promotion limits;
-- `rejected`: correctness, safety, or regression limits failed;
-- `not_comparable`: the baseline SHA or benchmark environment changed.
+- `manual_review`: both runs completed and the environment is comparable;
+- `not_comparable`: the baseline SHA, benchmark environment, or required metric
+  does not match.
 
-Peak swap is recorded in the benchmark comparison for observability, but it
-does not affect the promotion verdict. RAM safety continues to be enforced by
-the inference and key-generation peak-RSS limits. A manual-review verdict keeps
-the benchmark check successful but never triggers the automatic promotion job.
-
-An eligible candidate is squash-merged by a separate promotion job. The new
-code commit title includes inference and peak-RAM deltas, while its body holds
-the full baseline/candidate table. Promotion then creates one documentation-only
-commit that inserts a version entry at the top of the root README history. That
-entry records what changed, the mechanism, how it works, its benefit, prediction,
-and the benchmark delta. The runner baseline advances to this documentation
-commit, which becomes the exact base of the next candidate. A stale baseline
-can never be promoted.
-
-The README update uses the workflow token and therefore does not start another
-push workflow. It is intentionally performed only after a successful benchmark;
-rejected candidates never appear in the dev history.
+The report shows prediction, timing, CPU, RAM, and swap deltas but applies no
+performance rejection threshold, improvement threshold, or trade-off policy.
+It never labels a candidate as improved or regressed. Automatic promotion is
+disabled: CI never merges the pull request or writes to `dev`. The user reviews
+the report and decides manually whether and how to merge the PR.
 
 ### Bootstrap
 
 After installing or changing benchmark policy, manually commit and push the
 trusted maintenance files to `dev`. The existing dev workflow runs once and
-creates the first schema-1 baseline. Candidate PRs remain blocked until that
-successful bootstrap exists.
+creates the schema-1 baseline used for subsequent manual comparisons.
 
 ### Agent commands
 

@@ -14,22 +14,8 @@ EXPECTED_BASE_SHA="${5:-}"
 EXPECTED_HEAD_SHA="${6:-}"
 CHANGE_NOTE_FILE="${7:-}"
 
-STABLE_PERCENT="${FHE_STABLE_PERCENT:-3}"
-MAX_PRIMARY_REGRESSION_PERCENT="${FHE_MAX_PRIMARY_REGRESSION_PERCENT:-5}"
-REJECT_TIME_PERCENT="${FHE_REJECT_TIME_PERCENT:-10}"
-REJECT_RAM_PERCENT="${FHE_REJECT_RAM_PERCENT:-10}"
-REJECT_KEYGEN_PERCENT="${FHE_REJECT_KEYGEN_PERCENT:-30}"
-MAX_CPU_TIME_REGRESSION_PERCENT="${FHE_MAX_CPU_TIME_REGRESSION_PERCENT:-25}"
-RAM_HARD_CAP_KB="${FHE_RAM_HARD_CAP_KB:-21495808}"
-KEYGEN_RAM_HARD_CAP_KB="${FHE_KEYGEN_RAM_HARD_CAP_KB:-18874368}"
-RAM_AUTO_INCREASE_KB="${FHE_RAM_AUTO_INCREASE_KB:-1048576}"
-TRADEOFF_RATIO="${FHE_TRADEOFF_RATIO:-2}"
-
 COMPARISON_JSON="$OUTPUT_DIR/comparison.json"
 COMPARISON_MD="$OUTPUT_DIR/comparison.md"
-COMMIT_TITLE_FILE="$OUTPUT_DIR/commit-title.txt"
-COMMIT_BODY_FILE="$OUTPUT_DIR/commit-body.md"
-README_ENTRY_FILE="$OUTPUT_DIR/readme-entry.md"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -69,24 +55,8 @@ difference() {
     awk -v baseline="$1" -v candidate="$2" 'BEGIN {printf "%.3f", candidate - baseline}'
 }
 
-less_than() {
-    awk -v first="$1" -v second="$2" 'BEGIN {exit !(first < second)}'
-}
-
-less_equal() {
-    awk -v first="$1" -v second="$2" 'BEGIN {exit !(first <= second)}'
-}
-
 greater_than() {
     awk -v first="$1" -v second="$2" 'BEGIN {exit !(first > second)}'
-}
-
-greater_equal() {
-    awk -v first="$1" -v second="$2" 'BEGIN {exit !(first >= second)}'
-}
-
-absolute_value() {
-    awk -v value="$1" 'BEGIN {if (value < 0) value=-value; printf "%.3f", value}'
 }
 
 format_delta() {
@@ -141,31 +111,13 @@ average_cpu_delta="$(percent_change "$baseline_average_cpu" "$candidate_average_
 peak_cpu_delta="$(percent_change "$baseline_peak_cpu" "$candidate_peak_cpu")"
 keygen_delta="$(percent_change "$baseline_keygen" "$candidate_keygen")"
 keygen_peak_ram_delta="$(percent_change "$baseline_keygen_peak_ram" "$candidate_keygen_peak_ram")"
-inference_difference="$(difference "$baseline_inference" "$candidate_inference")"
-circuit_difference="$(difference "$baseline_circuit" "$candidate_circuit")"
-ram_difference="$(difference "$baseline_peak_ram" "$candidate_peak_ram")"
 swap_difference="$(difference "$baseline_peak_swap" "$candidate_peak_swap")"
 
-verdict="auto_merge"
-classification="Improved"
-declare -a reasons=()
-declare -a improvements=()
-
-mark_rejected() {
-    if [[ "$verdict" != "not_comparable" ]]; then
-        verdict="rejected"
-        classification="Regressed"
-    fi
-    reasons+=("$1")
-}
-
-mark_manual_review() {
-    if [[ "$verdict" == "auto_merge" ]]; then
-        verdict="manual_review"
-        classification="Manual review required"
-    fi
-    reasons+=("$1")
-}
+# Performance decisions are deliberately manual. This script only establishes
+# that two successful runs are comparable and renders their measured deltas.
+verdict="manual_review"
+classification="Manual review required"
+declare -a reasons=("Automatic performance decisions and promotion are disabled; review the measured deltas manually")
 
 mark_not_comparable() {
     verdict="not_comparable"
@@ -196,7 +148,7 @@ if [[ -n "$EXPECTED_HEAD_SHA" && "$candidate_commit" != "$EXPECTED_HEAD_SHA" ]];
     mark_not_comparable "Candidate SHA $candidate_commit does not match PR head $EXPECTED_HEAD_SHA"
 fi
 if [[ "$baseline_status" != "passed" || "$candidate_status" != "passed" ]]; then
-    mark_rejected "Both baseline and candidate benchmarks must pass"
+    mark_not_comparable "Both baseline and candidate benchmarks must pass before manual comparison"
 fi
 for metric_pair in \
     "$baseline_inference:$candidate_inference:inference_time" \
@@ -213,107 +165,7 @@ for metric_pair in \
         mark_not_comparable "Required metric $metric_name is missing or zero"
     fi
 done
-if [[ "$candidate_prediction" != "$baseline_prediction" ]]; then
-    mark_rejected "Prediction changed: $baseline_prediction -> $candidate_prediction"
-fi
-if greater_than "$candidate_peak_ram" "$RAM_HARD_CAP_KB"; then
-    mark_rejected "Inference peak RAM exceeds the hard cap of $(format_gib "$RAM_HARD_CAP_KB")"
-fi
-if greater_than "$candidate_keygen_peak_ram" "$KEYGEN_RAM_HARD_CAP_KB"; then
-    mark_rejected "Key generation peak RAM exceeds the hard cap of $(format_gib "$KEYGEN_RAM_HARD_CAP_KB")"
-fi
-if greater_than "$peak_ram_delta" "$REJECT_RAM_PERCENT"; then
-    mark_rejected "Inference peak RAM regressed by $(format_delta "$peak_ram_delta")"
-fi
-if greater_than "$inference_delta" "$REJECT_TIME_PERCENT" \
-        && greater_than "$inference_difference" 30; then
-    mark_rejected "Inference time regressed by $(format_delta "$inference_delta")"
-fi
-if greater_than "$circuit_delta" "$REJECT_TIME_PERCENT" \
-        && greater_than "$circuit_difference" 30; then
-    mark_rejected "FHE circuit time regressed by $(format_delta "$circuit_delta")"
-fi
-if greater_than "$keygen_delta" "$REJECT_KEYGEN_PERCENT"; then
-    mark_rejected "Key generation time regressed by $(format_delta "$keygen_delta")"
-fi
-if greater_than "$cpu_time_delta" "$MAX_CPU_TIME_REGRESSION_PERCENT" \
-        && greater_than "$inference_delta" -5; then
-    mark_rejected "CPU time increased by $(format_delta "$cpu_time_delta") without enough speed gain"
-fi
-
-if less_equal "$inference_delta" "-$STABLE_PERCENT"; then
-    improvements+=("Inference time $(format_delta "$inference_delta")")
-fi
-if less_equal "$circuit_delta" "-$STABLE_PERCENT"; then
-    improvements+=("FHE circuit time $(format_delta "$circuit_delta")")
-fi
-if less_equal "$peak_ram_delta" "-$STABLE_PERCENT"; then
-    improvements+=("Inference peak RAM $(format_delta "$peak_ram_delta")")
-fi
-if less_equal "$cpu_time_delta" -5; then
-    improvements+=("Inference CPU time $(format_delta "$cpu_time_delta")")
-fi
-if less_equal "$keygen_delta" -5; then
-    improvements+=("Key generation time $(format_delta "$keygen_delta")")
-fi
-if less_equal "$keygen_peak_ram_delta" -5; then
-    improvements+=("Key generation peak RAM $(format_delta "$keygen_peak_ram_delta")")
-fi
-
-if [[ "$verdict" != "rejected" && "$verdict" != "not_comparable" \
-        && ${#improvements[@]} -eq 0 ]]; then
-    mark_manual_review "No primary metric improved beyond the stability threshold"
-fi
-
-if [[ "$verdict" == "auto_merge" ]]; then
-    standard_ok=true
-    for delta in "$inference_delta" "$circuit_delta" "$peak_ram_delta" \
-            "$keygen_delta" "$keygen_peak_ram_delta"; do
-        if greater_than "$delta" "$STABLE_PERCENT"; then
-            standard_ok=false
-        fi
-    done
-
-    speed_gain="$(awk -v value="$inference_delta" 'BEGIN {printf "%.3f", -value}')"
-    ram_gain="$(awk -v value="$peak_ram_delta" 'BEGIN {printf "%.3f", -value}')"
-    speed_ram_ratio="0"
-    if greater_than "$peak_ram_delta" 0; then
-        speed_ram_ratio="$(awk -v speed="$speed_gain" -v ram="$peak_ram_delta" 'BEGIN {printf "%.3f", speed/ram}')"
-    fi
-
-    speed_memory_tradeoff=false
-    if greater_equal "$speed_gain" 5 \
-            && greater_than "$peak_ram_delta" "$STABLE_PERCENT" \
-            && less_equal "$peak_ram_delta" 5 \
-            && less_equal "$ram_difference" "$RAM_AUTO_INCREASE_KB" \
-            && less_equal "$circuit_delta" "$MAX_PRIMARY_REGRESSION_PERCENT" \
-            && less_equal "$cpu_time_delta" "$MAX_CPU_TIME_REGRESSION_PERCENT" \
-            && greater_equal "$speed_ram_ratio" "$TRADEOFF_RATIO"; then
-        speed_memory_tradeoff=true
-        classification="Improved with acceptable memory trade-off"
-    fi
-
-    memory_speed_tradeoff=false
-    if greater_equal "$ram_gain" 5 \
-            && greater_than "$inference_delta" "$STABLE_PERCENT" \
-            && less_equal "$inference_delta" 5 \
-            && less_equal "$circuit_delta" "$MAX_PRIMARY_REGRESSION_PERCENT" \
-            && less_equal "$cpu_time_delta" 10; then
-        memory_speed_tradeoff=true
-        classification="Improved with acceptable speed trade-off"
-    fi
-
-    if [[ "$standard_ok" != true && "$speed_memory_tradeoff" != true \
-            && "$memory_speed_tradeoff" != true ]]; then
-        verdict="manual_review"
-        classification="Manual review required"
-        reasons+=("The candidate has a mixed trade-off outside automatic promotion limits")
-    fi
-fi
-
 reasons_json="$(printf '%s\n' "${reasons[@]:-}" | jq -R 'select(length > 0)' | jq -s .)"
-improvements_json="$(printf '%s\n' "${improvements[@]:-}" | jq -R 'select(length > 0)' | jq -s .)"
-
 jq -n \
     --arg verdict "$verdict" \
     --arg classification "$classification" \
@@ -321,7 +173,6 @@ jq -n \
     --arg candidate_commit "$candidate_commit" \
     --arg prediction "$candidate_prediction" \
     --argjson reasons "$reasons_json" \
-    --argjson improvements "$improvements_json" \
     --argjson inference_delta "$inference_delta" \
     --argjson circuit_delta "$circuit_delta" \
     --argjson peak_ram_delta "$peak_ram_delta" \
@@ -340,7 +191,6 @@ jq -n \
         baseline_commit: $baseline_commit,
         candidate_commit: $candidate_commit,
         prediction: $prediction,
-        improvements: $improvements,
         reasons: $reasons,
         deltas_percent: {
             inference: $inference_delta,
@@ -378,11 +228,6 @@ jq -n \
     echo "| Keygen peak RAM | $(format_gib "$baseline_keygen_peak_ram") | $(format_gib "$candidate_keygen_peak_ram") | $(format_delta "$keygen_peak_ram_delta") |"
     echo "| Peak swap | ${baseline_peak_swap} KiB | ${candidate_peak_swap} KiB | ${swap_difference} KiB |"
     echo "| Prediction | $baseline_prediction | $candidate_prediction | — |"
-    if (( ${#improvements[@]} > 0 )); then
-        echo
-        echo "## Improvements"
-        printf -- '- %s\n' "${improvements[@]}"
-    fi
     if (( ${#reasons[@]} > 0 )); then
         echo
         echo "## Gate notes"
@@ -390,64 +235,8 @@ jq -n \
     fi
 } > "$COMPARISON_MD"
 
-clean_title="$(printf '%s' "$PR_TITLE" | tr '\r\n' ' ' | sed 's/[[:space:]]\+/ /g; s/[[:space:]]*$//')"
-title_suffix="infer $(format_delta "$inference_delta"), RAM $(format_delta "$peak_ram_delta")"
-printf '%.90s (%s)\n' "$clean_title" "$title_suffix" > "$COMMIT_TITLE_FILE"
-
-{
-    echo "Benchmark promotion: $classification"
-    echo
-    echo "Baseline: $baseline_commit"
-    echo "Candidate: $candidate_commit"
-    echo
-    echo "| Metric | Baseline | Candidate | Change |"
-    echo "|---|---:|---:|---:|"
-    echo "| Inference | $(format_seconds_value "$baseline_inference") | $(format_seconds_value "$candidate_inference") | $(format_delta "$inference_delta") |"
-    echo "| FHE circuit | $(format_seconds_value "$baseline_circuit") | $(format_seconds_value "$candidate_circuit") | $(format_delta "$circuit_delta") |"
-    echo "| Peak RAM | $(format_gib "$baseline_peak_ram") | $(format_gib "$candidate_peak_ram") | $(format_delta "$peak_ram_delta") |"
-    echo "| Average RAM | $(format_gib "$baseline_average_ram") | $(format_gib "$candidate_average_ram") | $(format_delta "$average_ram_delta") |"
-    echo "| CPU time | $(format_seconds_value "$baseline_cpu_time") | $(format_seconds_value "$candidate_cpu_time") | $(format_delta "$cpu_time_delta") |"
-    echo "| Average CPU | ${baseline_average_cpu}% | ${candidate_average_cpu}% | $(format_delta "$average_cpu_delta") |"
-    echo "| Peak CPU | ${baseline_peak_cpu}% | ${candidate_peak_cpu}% | $(format_delta "$peak_cpu_delta") |"
-    echo "| Key generation | $(format_seconds_value "$baseline_keygen") | $(format_seconds_value "$candidate_keygen") | $(format_delta "$keygen_delta") |"
-    echo "| Keygen peak RAM | $(format_gib "$baseline_keygen_peak_ram") | $(format_gib "$candidate_keygen_peak_ram") | $(format_delta "$keygen_peak_ram_delta") |"
-    echo
-    echo "Prediction: $candidate_prediction"
-    echo "Inference peak swap: ${candidate_peak_swap} KiB"
-    if (( ${#improvements[@]} > 0 )); then
-        echo
-        echo "Improvements:"
-        printf -- '- %s\n' "${improvements[@]}"
-    fi
-} > "$COMMIT_BODY_FILE"
-
-{
-    if [[ -n "$CHANGE_NOTE_FILE" ]]; then
-        sed 's/^## /#### /' "$CHANGE_NOTE_FILE"
-        echo
-    fi
-    echo "#### Benchmark so với phiên bản dev trước"
-    echo
-    echo "| Chỉ số | Trước | Sau | Thay đổi |"
-    echo "|---|---:|---:|---:|"
-    echo "| Sinh khóa | $(format_seconds_value "$baseline_keygen") | $(format_seconds_value "$candidate_keygen") | $(format_delta "$keygen_delta") |"
-    echo "| Suy luận | $(format_seconds_value "$baseline_inference") | $(format_seconds_value "$candidate_inference") | $(format_delta "$inference_delta") |"
-    echo "| Tính toán FHE | $(format_seconds_value "$baseline_circuit") | $(format_seconds_value "$candidate_circuit") | $(format_delta "$circuit_delta") |"
-    echo "| RAM trung bình | $(format_gib "$baseline_average_ram") | $(format_gib "$candidate_average_ram") | $(format_delta "$average_ram_delta") |"
-    echo "| RAM đỉnh | $(format_gib "$baseline_peak_ram") | $(format_gib "$candidate_peak_ram") | $(format_delta "$peak_ram_delta") |"
-    echo "| CPU time | $(format_seconds_value "$baseline_cpu_time") | $(format_seconds_value "$candidate_cpu_time") | $(format_delta "$cpu_time_delta") |"
-    echo "| CPU trung bình | ${baseline_average_cpu}% | ${candidate_average_cpu}% | $(format_delta "$average_cpu_delta") |"
-    echo "| CPU đỉnh | ${baseline_peak_cpu}% | ${candidate_peak_cpu}% | $(format_delta "$peak_cpu_delta") |"
-    echo
-    echo "**Đánh giá:** $classification  "
-    echo "**Prediction:** $candidate_prediction  "
-    echo "**Swap khi suy luận:** ${candidate_peak_swap} KiB"
-} > "$README_ENTRY_FILE"
-
 case "$verdict" in
-    auto_merge) exit 0 ;;
     manual_review) exit 0 ;;
-    rejected) exit 3 ;;
     not_comparable) exit 4 ;;
     *) exit 5 ;;
 esac
