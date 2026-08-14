@@ -176,7 +176,7 @@ number_or_zero() {
 
 max_number() {
     awk -v first="$(number_or_zero "${1:-0}")" -v second="$(number_or_zero "${2:-0}")" \
-        'BEGIN {print first > second ? first : second}'
+        'BEGIN {print (first > second ? first : second)}'
 }
 
 circuit_seconds() {
@@ -230,7 +230,7 @@ render_report() {
     commit_sha="${FHE_BENCHMARK_COMMIT:-${GITHUB_SHA:-unknown}}"
     commit_branch="${FHE_BENCHMARK_BRANCH:-${GITHUB_REF_NAME:-unknown}}"
     commit_subject="$(git -C "$REPO_ROOT" log -1 --pretty=%s 2>/dev/null || printf 'unknown')"
-    attempted="$(awk 'END {print NR > 0 ? NR-1 : 0}' "$RESULTS_CSV")"
+    attempted="$(awk 'END {print (NR > 0 ? NR-1 : 0)}' "$RESULTS_CSV")"
     successful="$(awk -F, 'NR>1 && $21=="passed" {count++} END {print count+0}' "$RESULTS_CSV")"
     correct="$(awk -F, 'NR>1 && $21=="passed" {sum+=$7} END {print sum+0}' "$RESULTS_CSV")"
     accuracy="$(awk -v correct="$correct" -v total="$successful" 'BEGIN {printf "%.2f", total ? 100*correct/total : 0}')"
@@ -428,6 +428,7 @@ while IFS=$'\t' read -r image_relative expected_class; do
         _ "$CLIENT_ROOT/build" "$EXPERIMENT" "$client_result" || exit "$LAST_PHASE_EXIT"
     image_end_ns="$(date +%s%N)"
 
+    FAILURE_PHASE="result_processing_${suffix}"
     decrypt_log="$LOG_DIR/decryption_${suffix}.log"
     infer_log="$LOG_DIR/inference_${suffix}.log"
     handgun_logit="$(awk -F': ' '/^Handgun:/ {print $2; exit}' "$decrypt_log")"
@@ -459,6 +460,7 @@ while IFS=$'\t' read -r image_relative expected_class; do
         "$(circuit_seconds "$layer2_raw")" "$(circuit_seconds "$layer3_raw")" \
         "$inference_avg_cpu" "$inference_peak_cpu" "$inference_avg_rss" "$inference_peak_rss" "$inference_peak_swap" >> "$RESULTS_CSV"
     rm -f -- "$client_input" "$server_input" "$server_result" "$client_result"
+    FAILURE_PHASE=""
 done < "$MANIFEST"
 
 OVERALL_STATUS="passed"
