@@ -1,4 +1,4 @@
-name: FHE sequential 10-image benchmark
+name: FHE staged 10-image benchmark
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
       - name: Validate fixed benchmark set
         run: ./CICD/validate_batch_manifest.sh "$GITHUB_WORKSPACE" "$FHE_BATCH_MANIFEST" "$FHE_BATCH_EXPECTED_COUNT"
 
-      - name: Run sequential 10-image FHE baseline
+      - name: Run staged 10-image FHE benchmark
         run: ./CICD/run_batch10_baseline.sh
 
       - name: Update successful batch baseline
@@ -46,7 +46,7 @@ jobs:
         run: |
           jq -e --arg sha "${{ github.sha }}" \
             '.status == "passed" and .commit == $sha and
-             .schema_version == 1 and .benchmark_type == "sequential_batch10" and
+             .schema_version == 1 and .benchmark_type == "staged_batch10" and
              .result.image_count == 10 and .result.successful_count == 10' \
             "$CICD_REPORT_DIR/batch10-benchmark.json" >/dev/null
           install -d -m 0750 "$(dirname "$CICD_BATCH_BASELINE_FILE")"
@@ -58,7 +58,7 @@ jobs:
           if [[ -f "$CICD_REPORT_DIR/batch10-summary.md" ]]; then
             cat "$CICD_REPORT_DIR/batch10-summary.md" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "# FHE sequential 10-image baseline" >> "$GITHUB_STEP_SUMMARY"
+            echo "# FHE staged 10-image benchmark" >> "$GITHUB_STEP_SUMMARY"
             echo "Batch benchmark report was not generated." >> "$GITHUB_STEP_SUMMARY"
           fi
 

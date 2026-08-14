@@ -33,15 +33,15 @@ already running, when available RAM or disk is below the safety threshold, or
 when decryption fails. Jobs are serialized and are not automatically canceled
 so key-generation cleanup can finish.
 
-## Sequential 10-image baseline
+## Staged 10-image benchmark
 
-`dev-fhe-batch10-baseline.yml` establishes the unoptimized multi-image
-reference before staged or batched inference work. It uses the tracked,
-deterministic `CICD/benchmark10-images.tsv` set: five Handgun and five Knife
-validation images. The workflow builds once, generates and transfers one
-keyset, then runs ten independent encrypt/infer/decrypt requests sequentially.
-It intentionally reloads the server evaluation keys for every image, matching
-the pre-batch architecture.
+`dev-fhe-batch10-baseline.yml` measures layer-major, disk-backed multi-image
+inference against the tracked deterministic `CICD/benchmark10-images.tsv` set:
+five Handgun and five Knife validation images. The workflow builds once,
+generates and transfers one keyset, encrypts all ten images, invokes one
+`FHEServer infer_batch` process, and then decrypts all ten results. The server
+loads each layer's rotation-key set once and stores only encrypted intermediate
+checkpoints between stages.
 
 The report directory contains:
 
@@ -49,13 +49,14 @@ The report directory contains:
 - `batch10-benchmark.json`: machine-readable baseline for later comparison;
 - `batch10-results.csv`: logits, prediction, timing, CPU/RAM/swap per image;
 - `batch10-phase-metrics.csv`: GNU time and one-second `/proc` samples;
-- `profiles/01` through `profiles/10`: operation-level FHEServer profiles.
+- `profiles/batch`: aggregate operation-level FHEServer profile;
+- `batch10-server-metrics.tsv`: per-image circuit and layer compute time.
 
 A successful `dev` run writes the external baseline to
 `/home/fhe-runner/CICD/state/dev-batch10-baseline.json`. Generated keys and
-ciphertexts are removed on exit. Because ten sequential inferences take about
-two hours on the current 12-core runner, this workflow has a separate 240-minute
-timeout and its own `fhe-benchmark-batch10` concurrency group. The machine has
+ciphertexts and intermediate checkpoints are removed on exit. The workflow has
+a separate 240-minute timeout and its own `fhe-benchmark-batch10` concurrency
+group. The machine has
 one self-hosted runner, so batch and single-image jobs remain sequential, while
 new pull-request events can no longer replace a pending batch run.
 

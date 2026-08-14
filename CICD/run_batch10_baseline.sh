@@ -32,6 +32,9 @@ CLIENT_CIPHERTEXTS="$CLIENT_ROOT/ciphertexts"
 SERVER_CIPHERTEXTS="$SERVER_ROOT/ciphertexts"
 SERVER_RESULTS="$SERVER_ROOT/results"
 SERVER_CHECKPOINTS="$SERVER_ROOT/checkpoints"
+SERVER_BATCH_MANIFEST="$REPORT_DIR/batch10-server-jobs.tsv"
+SERVER_BATCH_METRICS="$REPORT_DIR/batch10-server-metrics.tsv"
+BATCH_JOB_METADATA="$REPORT_DIR/batch10-job-metadata.tsv"
 LOG_DIR="$REPORT_DIR/logs"
 PROFILE_DIR="$REPORT_DIR/profiles"
 PHASE_METRICS="$REPORT_DIR/batch10-phase-metrics.csv"
@@ -40,6 +43,8 @@ SUMMARY_MD="$REPORT_DIR/batch10-summary.md"
 BENCHMARK_JSON="$REPORT_DIR/batch10-benchmark.json"
 
 mkdir -p "$LOG_DIR" "$PROFILE_DIR"
+: > "$SERVER_BATCH_MANIFEST"
+: > "$BATCH_JOB_METADATA"
 printf 'phase,status,exit_code,wall_seconds,user_seconds,system_seconds,gnu_average_cpu_percent,sampled_average_cpu_percent,sampled_peak_cpu_percent,average_rss_kb,sampled_peak_rss_kb,time_peak_rss_kb,resource_samples,peak_swap_kb,fs_inputs,fs_outputs\n' > "$PHASE_METRICS"
 printf 'index,image,true_class,handgun_logit,knife_logit,prediction,correct,encrypt_seconds,inference_seconds,decrypt_seconds,total_seconds,circuit_seconds,layer1_seconds,layer2_seconds,layer3_seconds,inference_average_cpu_percent,inference_peak_cpu_percent,inference_average_rss_kb,inference_peak_rss_kb,inference_peak_swap_kb,status\n' > "$RESULTS_CSV"
 
@@ -273,7 +278,7 @@ render_report() {
 
     if (( exit_code == 0 && successful == EXPECTED_COUNT )); then OVERALL_STATUS="passed"; fi
     {
-        echo '# FHE sequential 10-image baseline'
+        echo '# FHE staged 10-image benchmark'
         echo
         echo '## Key results'
         echo
@@ -282,12 +287,12 @@ render_report() {
         echo "| Status | $OVERALL_STATUS |"
         echo "| Images successful | $successful/$EXPECTED_COUNT |"
         echo "| Classification accuracy | $correct/$successful ($accuracy%) |"
+        echo '| Execution strategy | Layer-major, disk-backed checkpoints |'
         echo "| Total pipeline | $(format_seconds "$pipeline_wall") |"
         echo "| Key generation | $(format_seconds "$keygen_wall") |"
-        echo "| Sequential image workload | $(format_seconds "$batch_total") |"
-        echo "| Total inference | $(format_seconds "$inference_total") |"
-        echo "| Average inference/image | $(format_seconds "$inference_avg") |"
-        echo "| Min / max inference | $(format_seconds "$inference_min") / $(format_seconds "$inference_max") |"
+        echo "| Staged image workload | $(format_seconds "$batch_total") |"
+        echo "| Batch inference wall time | $(format_seconds "$inference_total") |"
+        echo "| Amortized inference/image | $(format_seconds "$inference_avg") |"
         echo "| Average FHE circuit/image | $(format_seconds "$circuit_avg") |"
         echo "| Average key loading/image | $(format_seconds "$average_key_loading") |"
         echo "| Average inference CPU | ${avg_cpu}% |"
@@ -355,7 +360,7 @@ render_report() {
         --argjson decryption_avg "$(number_or_zero "$decryption_avg")" \
         --argjson client_key_bytes "$(number_or_zero "$client_key_bytes")" \
         --argjson server_key_bytes "$(number_or_zero "$server_key_bytes")" \
-        '{schema_version:1, benchmark_type:"sequential_batch10", status:$status,
+        '{schema_version:1, benchmark_type:"staged_batch10", execution_strategy:"layer_major_disk_backed", status:$status,
           commit:$commit, branch:$branch, commit_subject:$commit_subject,
           failed_phase:($failed_phase | if length==0 then null else . end),
           environment:{manifest:$manifest,manifest_sha256:$manifest_sha256,test_set_sha256:$test_set_sha256,weights_manifest_sha256:$weights_sha256},
@@ -386,7 +391,7 @@ for command in /usr/bin/time cmake jq sha256sum pgrep awk; do
 done
 "$REPO_ROOT/CICD/validate_batch_manifest.sh" "$REPO_ROOT" "$MANIFEST" "$EXPECTED_COUNT"
 if [[ ! -d "$WEIGHTS_DIR" || ! -f "$WEIGHTS_DIR/fc.bin" ]]; then echo "Missing weights: $WEIGHTS_DIR" >&2; FAILURE_PHASE=preflight; exit 2; fi
-if pgrep -f '(^|/)FHEServer infer ' >/dev/null; then echo 'Another FHEServer inference is running.' >&2; FAILURE_PHASE=preflight; exit 75; fi
+if pgrep -f '(^|/)FHEServer infer(_batch)? ' >/dev/null; then echo 'Another FHEServer inference is running.' >&2; FAILURE_PHASE=preflight; exit 75; fi
 available_kb="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
 free_disk_kb="$(df -Pk "$REPO_ROOT" | awk 'NR==2 {print $4}')"
 if (( available_kb < 18*1024*1024 )); then echo "At least 18 GiB available RAM is required." >&2; FAILURE_PHASE=preflight; exit 75; fi
@@ -414,23 +419,39 @@ while IFS=$'\t' read -r image_relative expected_class; do
     server_input="$SERVER_CIPHERTEXTS/batch10-${suffix}-input.bin"
     server_result="$SERVER_RESULTS/batch10-${suffix}-result.bin"
     client_result="$CLIENT_CIPHERTEXTS/batch10-${suffix}-result.bin"
-    image_profile="$PROFILE_DIR/$suffix"
-    mkdir -p "$image_profile"
-    image_start_ns="$(date +%s%N)"
-
     measure_phase "encryption_${suffix}" bash -c 'cd "$1" && exec ./FHEClient encrypt "$2" "$3" "$4"' \
         _ "$CLIENT_ROOT/build" "$EXPERIMENT" "$image" "$client_input" || exit "$LAST_PHASE_EXIT"
     cp -- "$client_input" "$server_input"
-    measure_phase "inference_${suffix}" bash -c 'cd "$1" && export FHE_PROFILE=1 FHE_PROFILE_DIR="$5"; exec ./FHEServer infer "$2" "$3" "$4" 1' \
-        _ "$SERVER_ROOT/build" "$EXPERIMENT" "$server_input" "$server_result" "$image_profile" || exit "$LAST_PHASE_EXIT"
+
+    printf '%s\t%s\n' "$server_input" "$server_result" >> "$SERVER_BATCH_MANIFEST"
+    printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$index" "$image_relative" "$expected_class" "$client_input" "$server_input" \
+        "$server_result" "$client_result" >> "$BATCH_JOB_METADATA"
+done < "$MANIFEST"
+
+mkdir -p "$PROFILE_DIR/batch"
+measure_phase inference_batch bash -c \
+    'cd "$1" && export FHE_PROFILE=1 FHE_PROFILE_DIR="$6"; exec ./FHEServer infer_batch "$2" "$3" "$4" "$5" 1' \
+    _ "$SERVER_ROOT/build" "$EXPERIMENT" "$SERVER_BATCH_MANIFEST" "$SERVER_CHECKPOINTS" \
+    "$SERVER_BATCH_METRICS" "$PROFILE_DIR/batch" || exit "$LAST_PHASE_EXIT"
+
+batch_inference_seconds="$(phase_metric inference_batch 4)"
+amortized_inference_seconds="$(awk -v total="$(number_or_zero "$batch_inference_seconds")" \
+    -v count="$EXPECTED_COUNT" 'BEGIN {printf "%.3f", count ? total/count : 0}')"
+inference_avg_cpu="$(phase_metric inference_batch 8)"
+inference_peak_cpu="$(phase_metric inference_batch 9)"
+inference_avg_rss="$(phase_metric inference_batch 10)"
+inference_peak_rss="$(max_number "$(phase_metric inference_batch 11)" "$(phase_metric inference_batch 12)")"
+inference_peak_swap="$(phase_metric inference_batch 14)"
+
+while IFS=$'\t' read -r index image_relative expected_class client_input server_input server_result client_result; do
+    suffix="$(printf '%02d' "$index")"
     cp -- "$server_result" "$client_result"
     measure_phase "decryption_${suffix}" bash -c 'cd "$1" && exec ./FHEClient decrypt "$2" "$3"' \
         _ "$CLIENT_ROOT/build" "$EXPERIMENT" "$client_result" || exit "$LAST_PHASE_EXIT"
-    image_end_ns="$(date +%s%N)"
 
     FAILURE_PHASE="result_processing_${suffix}"
     decrypt_log="$LOG_DIR/decryption_${suffix}.log"
-    infer_log="$LOG_DIR/inference_${suffix}.log"
     handgun_logit="$(awk -F': ' '/^Handgun:/ {print $2; exit}' "$decrypt_log")"
     knife_logit="$(awk -F': ' '/^Knife:/ {print $2; exit}' "$decrypt_log")"
     prediction="$(awk -F': ' '/^Prediction:/ {print $2; exit}' "$decrypt_log")"
@@ -438,29 +459,25 @@ while IFS=$'\t' read -r image_relative expected_class; do
         echo "Invalid decryption output for $image_relative" >&2; FAILURE_PHASE="decryption_validation_${suffix}"; exit 1
     fi
     correct=0; [[ "$prediction" != "$expected_class" ]] || correct=1
-    clean_infer_log="$LOG_DIR/inference_${suffix}.clean.log"
-    sed $'s/\033\[[0-9;]*m//g' "$infer_log" > "$clean_infer_log"
-    layer1_raw="$(sed -n 's/.*(Layer 1 took:):[^0-9]*\([^[:space:]]*\).*/\1/p' "$clean_infer_log" | tail -1)"
-    layer2_raw="$(sed -n 's/.*(Layer 2 took:):[^0-9]*\([^[:space:]]*\).*/\1/p' "$clean_infer_log" | tail -1)"
-    layer3_raw="$(sed -n 's/.*(Layer 3 took:):[^0-9]*\([^[:space:]]*\).*/\1/p' "$clean_infer_log" | tail -1)"
-    circuit_raw="$(sed -n 's/.*whole circuit took: ): *\([^[:space:]]*\).*/\1/p' "$clean_infer_log" | tail -1)"
+    metric_line="$(awk -F'\t' -v image_index="$index" 'NR>1 && $1==image_index {print; exit}' "$SERVER_BATCH_METRICS")"
+    if [[ -z "$metric_line" ]]; then
+        echo "Missing staged batch metrics for image $index" >&2
+        FAILURE_PHASE="batch_metrics_${suffix}"
+        exit 1
+    fi
+    IFS=$'\t' read -r _ _ _ circuit_value layer1_value layer2_value layer3_value final_value <<< "$metric_line"
     encrypt_seconds="$(phase_metric "encryption_${suffix}" 4)"
-    inference_seconds="$(phase_metric "inference_${suffix}" 4)"
     decrypt_seconds="$(phase_metric "decryption_${suffix}" 4)"
-    total_seconds="$(awk -v start="$image_start_ns" -v end="$image_end_ns" 'BEGIN {printf "%.3f", (end-start)/1000000000}')"
-    inference_avg_cpu="$(phase_metric "inference_${suffix}" 8)"
-    inference_peak_cpu="$(phase_metric "inference_${suffix}" 9)"
-    inference_avg_rss="$(phase_metric "inference_${suffix}" 10)"
-    inference_peak_rss="$(max_number "$(phase_metric "inference_${suffix}" 11)" "$(phase_metric "inference_${suffix}" 12)")"
-    inference_peak_swap="$(phase_metric "inference_${suffix}" 14)"
+    total_seconds="$(awk -v enc="$(number_or_zero "$encrypt_seconds")" \
+        -v inf="$amortized_inference_seconds" -v dec="$(number_or_zero "$decrypt_seconds")" \
+        'BEGIN {printf "%.3f", enc+inf+dec}')"
     printf '%d,%s,%s,%s,%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,passed\n' \
         "$index" "$image_relative" "$expected_class" "$handgun_logit" "$knife_logit" "$prediction" "$correct" \
-        "$encrypt_seconds" "$inference_seconds" "$decrypt_seconds" "$total_seconds" \
-        "$(circuit_seconds "$circuit_raw")" "$(circuit_seconds "$layer1_raw")" \
-        "$(circuit_seconds "$layer2_raw")" "$(circuit_seconds "$layer3_raw")" \
+        "$encrypt_seconds" "$amortized_inference_seconds" "$decrypt_seconds" "$total_seconds" \
+        "$circuit_value" "$layer1_value" "$layer2_value" "$layer3_value" \
         "$inference_avg_cpu" "$inference_peak_cpu" "$inference_avg_rss" "$inference_peak_rss" "$inference_peak_swap" >> "$RESULTS_CSV"
     rm -f -- "$client_input" "$server_input" "$server_result" "$client_result"
     FAILURE_PHASE=""
-done < "$MANIFEST"
+done < "$BATCH_JOB_METADATA"
 
 OVERALL_STATUS="passed"
