@@ -17,9 +17,9 @@ struct KeySet {
 inline const std::vector<KeySet>& schedule() {
     static const std::vector<KeySet> value = {
         {"rotations-layer1.bin", 16384, {1, -1, 32, -32, -1024, 1024}},
-        {"rotations-layer2-downsample.bin", 0, {1, 2, 4, 8, 48, -768, 24576, -8192}},
+        {"rotations-layer2-downsample.bin", 0, {1, 4, 8, 48, -768, 24576, -8192}},
         {"rotations-layer2.bin", 8192, {1, -1, 16, -16, -256}},
-        {"rotations-layer3-downsample.bin", 0, {1, 2, 4, 24, -192, 12288, -4096}},
+        {"rotations-layer3-downsample.bin", 0, {1, 4, 24, -192, 12288, -4096}},
         {"rotations-layer3.bin", 4096, {1, -1, 8, -8, -64}},
         {"rotations-finallayer.bin", 0,
          {1, 2, 4, 8, 16, 32, -15, 64, 128, 256, 512, 1024, 2048}},

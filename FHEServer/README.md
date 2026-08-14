@@ -46,6 +46,12 @@ index for every application-level rotation. The Markdown report compares the
 observed indices with the shared key-generation schedule in
 `Common/RotationKeySchedule.h`. Missing indices are reported only as candidates
 for a later pruning experiment; inference never removes keys automatically.
+
+The shared schedule omits rotation index `2` from the layer 2 and layer 3
+downsample key sets. A complete profiled inference observed no application use
+of those two keys, while the downsample sets contain no bootstrapping keys.
+Regenerate the client/server evaluation keys after changing this schedule.
+
 Profiling is disabled by default. Enable it with:
 
 ```bash

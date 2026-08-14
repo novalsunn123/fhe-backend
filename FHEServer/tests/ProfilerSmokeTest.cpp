@@ -1,5 +1,7 @@
 #include "Profiler.h"
+#include "RotationKeySchedule.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +21,10 @@ bool contains(const std::string& text, const std::string& expected) {
     if (text.find(expected) != std::string::npos) return true;
     std::cerr << "Missing profiler output fragment: " << expected << '\n';
     return false;
+}
+
+bool containsRotation(const std::vector<std::int32_t>& rotations, std::int32_t rotation) {
+    return std::find(rotations.begin(), rotations.end(), rotation) != rotations.end();
 }
 }  // namespace
 
@@ -68,6 +74,10 @@ int main(int argc, char* argv[]) {
     const std::string json = readFile(output_directory / "fhe-operation-profile.json");
     const std::string markdown = readFile(output_directory / "fhe-operation-profile.md");
     const std::string csv = readFile(output_directory / "fhe-operation-events.csv");
+    const auto& layer2Downsample =
+        fhe_rotation_keys::find("rotations-layer2-downsample.bin").application_rotations;
+    const auto& layer3Downsample =
+        fhe_rotation_keys::find("rotations-layer3-downsample.bin").application_rotations;
 
     const bool valid =
         contains(json, "\"schema_version\": 3") &&
@@ -80,6 +90,10 @@ int main(int argc, char* argv[]) {
         contains(markdown, "| rotations-layer1.bin | rotation | 1 | 1 |") &&
         contains(markdown, "| eval_mult_plain | 1 |") &&
         contains(csv, "rotation_index,rotation_key_set") &&
-        contains(csv, "weight_text_parse,parse_weight_text,Layer test,Block test");
+        contains(csv, "weight_text_parse,parse_weight_text,Layer test,Block test") &&
+        !containsRotation(layer2Downsample, 2) &&
+        !containsRotation(layer3Downsample, 2) &&
+        containsRotation(layer2Downsample, 1) && containsRotation(layer2Downsample, 4) &&
+        containsRotation(layer3Downsample, 1) && containsRotation(layer3Downsample, 4);
     return valid ? 0 : 1;
 }
