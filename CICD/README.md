@@ -33,6 +33,30 @@ already running, when available RAM or disk is below the safety threshold, or
 when decryption fails. Jobs are serialized and are not automatically canceled
 so key-generation cleanup can finish.
 
+## Sequential 10-image baseline
+
+`dev-fhe-batch10-baseline.yml` establishes the unoptimized multi-image
+reference before staged or batched inference work. It uses the tracked,
+deterministic `CICD/benchmark10-images.tsv` set: five Handgun and five Knife
+validation images. The workflow builds once, generates and transfers one
+keyset, then runs ten independent encrypt/infer/decrypt requests sequentially.
+It intentionally reloads the server evaluation keys for every image, matching
+the pre-batch architecture.
+
+The report directory contains:
+
+- `batch10-summary.md`: compact aggregate and per-image table;
+- `batch10-benchmark.json`: machine-readable baseline for later comparison;
+- `batch10-results.csv`: logits, prediction, timing, CPU/RAM/swap per image;
+- `batch10-phase-metrics.csv`: GNU time and one-second `/proc` samples;
+- `profiles/01` through `profiles/10`: operation-level FHEServer profiles.
+
+A successful `dev` run writes the external baseline to
+`/home/fhe-runner/CICD/state/dev-batch10-baseline.json`. Generated keys and
+ciphertexts are removed on exit. Because ten sequential inferences take about
+two hours on the current 12-core runner, this workflow has a separate 240-minute
+timeout while sharing the global `fhe-benchmark` concurrency group.
+
 ## Agent performance review
 
 Ordinary agent work uses an `agent/<task-slug>` branch and a pull request into
