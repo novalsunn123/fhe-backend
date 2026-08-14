@@ -7,12 +7,17 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
+
+#include "RotationKeySchedule.h"
 
 namespace {
 thread_local std::string profile_layer;
 thread_local std::string profile_block;
+thread_local std::string profile_rotation_key_set;
 
 bool isFalseValue(const std::string& value) {
     return value == "0" || value == "false" || value == "FALSE" ||
@@ -97,6 +102,38 @@ struct OperationSummary {
     double total = 0.0;
     double maximum = 0.0;
 };
+
+struct RotationUsageSummary {
+    std::size_t count = 0;
+    double total = 0.0;
+};
+
+using RotationUsageKey = std::tuple<std::string, std::string, std::int32_t>;
+
+std::map<RotationUsageKey, RotationUsageSummary> summarizeRotationUsage(
+        const std::vector<ProfileEvent>& events) {
+    std::map<RotationUsageKey, RotationUsageSummary> summaries;
+    for (const auto& event : events) {
+        if (!event.rotation_index) continue;
+        const RotationUsageKey key{event.rotation_key_set, event.event_type,
+                                   *event.rotation_index};
+        auto& summary = summaries[key];
+        ++summary.count;
+        summary.total += event.duration_seconds;
+    }
+    return summaries;
+}
+
+std::set<std::int32_t> observedRotationsFor(
+        const std::vector<ProfileEvent>& events, const std::string& key_set) {
+    std::set<std::int32_t> result;
+    for (const auto& event : events) {
+        if (event.rotation_key_set == key_set && event.rotation_index) {
+            result.insert(*event.rotation_index);
+        }
+    }
+    return result;
+}
 
 const std::vector<std::string>& convolutionOperationTypes() {
     static const std::vector<std::string> types = {
@@ -214,12 +251,20 @@ void OperationProfiler::setContext(const std::string& layer, const std::string& 
     profile_block = block;
 }
 
+void OperationProfiler::setRotationKeySet(const std::string& key_set) {
+    profile_rotation_key_set = key_set;
+}
+
 std::string OperationProfiler::currentLayer() const {
     return profile_layer;
 }
 
 std::string OperationProfiler::currentBlock() const {
     return profile_block;
+}
+
+std::string OperationProfiler::currentRotationKeySet() const {
+    return profile_rotation_key_set;
 }
 
 void OperationProfiler::finalize(const std::string& status, const std::string& error_summary) {
@@ -248,6 +293,7 @@ void OperationProfiler::writeMarkdown(const std::string& status,
     requireWritable(output, path);
     const BootstrapSummary bootstrap = summarizeBootstraps(events);
     const auto operation_summaries = summarizeOperations(events);
+    const auto rotation_usage = summarizeRotationUsage(events);
 
     output << "# FHEServer operation profile\n\n"
            << "| Metric | Value |\n|---|---|\n"
@@ -297,6 +343,48 @@ void OperationProfiler::writeMarkdown(const std::string& status,
                << " | "
                << formatDuration(summary.count ? std::optional<double>(summary.maximum) : std::nullopt)
                << " |\n";
+    }
+
+    output << "\n## Application rotation-key audit\n\n"
+           << "These are application rotations observed outside OpenFHE's internal "
+              "bootstrapping implementation. A configured index with no observed call is "
+              "a candidate for a separate prune experiment, not an automatic removal.\n\n"
+           << "| Key set | Operation | Rotation | Calls | Total |\n"
+           << "|---|---|---:|---:|---:|\n";
+    for (const auto& [key, summary] : rotation_usage) {
+        const auto& [key_set, operation, index] = key;
+        output << "| " << (key_set.empty() ? "unavailable" : key_set) << " | "
+               << operation << " | " << index << " | " << summary.count << " | "
+               << formatDuration(summary.total) << " |\n";
+    }
+
+    output << "\n### Configured versus observed application rotations\n\n"
+           << "| Key set | Configured | Observed | Not observed | Unexpected |\n"
+           << "|---|---|---|---|---|\n";
+    for (const auto& key_set : fhe_rotation_keys::schedule()) {
+        const auto observed = observedRotationsFor(events, key_set.filename);
+        std::set<std::int32_t> configured(key_set.application_rotations.begin(),
+                                          key_set.application_rotations.end());
+        std::vector<std::int32_t> missing;
+        std::vector<std::int32_t> unexpected;
+        std::set_difference(configured.begin(), configured.end(), observed.begin(), observed.end(),
+                            std::back_inserter(missing));
+        std::set_difference(observed.begin(), observed.end(), configured.begin(), configured.end(),
+                            std::back_inserter(unexpected));
+        const auto render = [](const auto& values) {
+            if (values.empty()) return std::string("—");
+            std::ostringstream text;
+            bool first = true;
+            for (const auto value : values) {
+                if (!first) text << ", ";
+                text << value;
+                first = false;
+            }
+            return text.str();
+        };
+        output << "| " << key_set.filename << " | "
+               << render(configured) << " | " << render(observed) << " | "
+               << render(missing) << " | " << render(unexpected) << " |\n";
     }
 
     output << "\n## Layer and block timings\n\n"
@@ -350,8 +438,9 @@ void OperationProfiler::writeJson(const std::string& status,
     requireWritable(output, path);
     const BootstrapSummary bootstrap = summarizeBootstraps(events);
     const auto operation_summaries = summarizeOperations(events);
+    const auto rotation_usage = summarizeRotationUsage(events);
     output << std::fixed << std::setprecision(6)
-           << "{\n  \"schema_version\": 2,\n"
+           << "{\n  \"schema_version\": 3,\n"
            << "  \"status\": \"" << jsonEscape(status) << "\",\n"
            << "  \"error_summary\": ";
     if (error_summary.empty()) output << "null"; else output << "\"" << jsonEscape(error_summary) << "\"";
@@ -400,7 +489,22 @@ void OperationProfiler::writeJson(const std::string& status,
         first_operation = false;
     }
     if (!first_operation) output << '\n';
-    output << "  },\n  \"block_summary\": {";
+    output << "  },\n  \"rotation_usage_summary\": [";
+    bool first_rotation = true;
+    for (const auto& [key, summary] : rotation_usage) {
+        const auto& [key_set, operation, index] = key;
+        output << (first_rotation ? "\n" : ",\n")
+               << "    {\"key_set\": ";
+        if (key_set.empty()) output << "null";
+        else output << "\"" << jsonEscape(key_set) << "\"";
+        output << ", \"operation\": \"" << jsonEscape(operation)
+               << "\", \"rotation_index\": " << index
+               << ", \"count\": " << summary.count
+               << ", \"total_seconds\": " << summary.total << "}";
+        first_rotation = false;
+    }
+    if (!first_rotation) output << '\n';
+    output << "  ],\n  \"block_summary\": {";
     bool first_block = true;
     for (const auto& event : events) {
         if (event.event_type != "block") continue;
@@ -427,6 +531,11 @@ void OperationProfiler::writeJson(const std::string& status,
         if (event.level_before) output << *event.level_before; else output << "null";
         output << ", \"level_after\": ";
         if (event.level_after) output << *event.level_after; else output << "null";
+        output << ", \"rotation_index\": ";
+        if (event.rotation_index) output << *event.rotation_index; else output << "null";
+        output << ", \"rotation_key_set\": ";
+        if (event.rotation_key_set.empty()) output << "null";
+        else output << "\"" << jsonEscape(event.rotation_key_set) << "\"";
         output << ", \"file\": ";
         if (event.file.empty()) output << "null"; else output << "\"" << jsonEscape(event.file) << "\"";
         output << ", \"file_size_bytes\": ";
@@ -443,7 +552,7 @@ void OperationProfiler::writeCsv(const std::vector<ProfileEvent>& events) const 
         std::filesystem::path(output_directory_) / "fhe-operation-events.csv";
     std::ofstream output(path);
     requireWritable(output, path);
-    output << "sequence,event_type,event_name,layer,block,duration_seconds,status,slots,level_before,level_after,file,file_size_bytes\n";
+    output << "sequence,event_type,event_name,layer,block,duration_seconds,status,slots,level_before,level_after,rotation_index,rotation_key_set,file,file_size_bytes\n";
     output << std::fixed << std::setprecision(6);
     for (const auto& event : events) {
         output << event.sequence << ',' << csvEscape(event.event_type) << ','
@@ -455,7 +564,10 @@ void OperationProfiler::writeCsv(const std::vector<ProfileEvent>& events) const 
         if (event.level_before) output << *event.level_before;
         output << ',';
         if (event.level_after) output << *event.level_after;
-        output << ',' << csvEscape(event.file) << ',';
+        output << ',';
+        if (event.rotation_index) output << *event.rotation_index;
+        output << ',' << csvEscape(event.rotation_key_set)
+               << ',' << csvEscape(event.file) << ',';
         if (event.file_size_bytes) output << *event.file_size_bytes;
         output << '\n';
     }
@@ -491,6 +603,7 @@ ProfileScope::ProfileScope(std::string event_type, std::string event_name,
     event_.event_name = std::move(event_name);
     event_.layer = layer.empty() ? profiler.currentLayer() : std::move(layer);
     event_.block = block.empty() ? profiler.currentBlock() : std::move(block);
+    event_.rotation_key_set = profiler.currentRotationKeySet();
 }
 
 ProfileScope::~ProfileScope() {
@@ -509,6 +622,7 @@ void ProfileScope::finish() {
 void ProfileScope::setSlots(std::uint32_t slots) { if (active_) event_.slots = slots; }
 void ProfileScope::setLevelBefore(std::uint32_t level) { if (active_) event_.level_before = level; }
 void ProfileScope::setLevelAfter(std::uint32_t level) { if (active_) event_.level_after = level; }
+void ProfileScope::setRotationIndex(std::int32_t index) { if (active_) event_.rotation_index = index; }
 
 void ProfileScope::setFile(const std::string& file) {
     if (!active_) return;

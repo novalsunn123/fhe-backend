@@ -33,6 +33,38 @@ already running, when available RAM or disk is below the safety threshold, or
 when decryption fails. Jobs are serialized and are not automatically canceled
 so key-generation cleanup can finish.
 
+## Staged 10-image benchmark
+
+`dev-fhe-batch10-baseline.yml` measures layer-major, disk-backed multi-image
+inference against the tracked deterministic `CICD/benchmark10-images.tsv` set:
+five Handgun and five Knife validation images. The workflow builds once,
+generates and transfers one keyset, encrypts all ten images, invokes one
+`FHEServer infer_batch` process, and then decrypts all ten results. The server
+loads each layer's rotation-key set once and stores only encrypted intermediate
+checkpoints between stages.
+
+The report directory contains:
+
+- `batch10-summary.md`: compact aggregate and per-image table;
+- `batch10-benchmark.json`: machine-readable baseline for later comparison;
+- `batch10-results.csv`: logits, prediction, timing, CPU/RAM/swap per image;
+- `batch10-phase-metrics.csv`: GNU time and one-second `/proc` samples;
+- `profiles/batch`: aggregate operation-level FHEServer profile;
+- `batch10-server-metrics.tsv`: per-image circuit and layer compute time.
+
+A successful `dev` run writes the external baseline to
+`/home/fhe-runner/CICD/state/dev-batch10-baseline.json`. Generated keys and
+ciphertexts and intermediate checkpoints are removed on exit. The workflow has
+a separate 240-minute timeout and its own `fhe-benchmark-batch10` concurrency
+group. The machine has
+one self-hosted runner, so batch and single-image jobs remain sequential, while
+new pull-request events can no longer replace a pending batch run.
+
+Before the initial baseline is merged, the workflow also accepts pushes from
+the exact bootstrap branch `agent/rotation-key-audit`. That branch run uploads
+the same report but cannot update `dev-batch10-baseline.json`; only a successful
+run whose ref is exactly `refs/heads/dev` installs the comparison baseline.
+
 ## Agent performance review
 
 Ordinary agent work uses an `agent/<task-slug>` branch and a pull request into

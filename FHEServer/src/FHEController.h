@@ -78,6 +78,7 @@ public:
     Ctxt add(const Ctxt& c, const Ptxt& p);
     Ctxt mult(const Ctxt& c, double d);
     Ctxt mult(const Ctxt& c, const Ptxt& p);
+    Ctxt profiled_rotate(const Ctxt& c, std::int32_t index);
     Ctxt bootstrap(const Ctxt& c, bool timing = false);
     Ctxt bootstrap(const Ctxt& c, int precision, bool timing = false);
     Ctxt relu(const Ctxt& c, double scale, bool timing = false);

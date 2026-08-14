@@ -28,15 +28,17 @@ public:
     template <typename Digits>
     Ctxt EvalFastRotation(const Ctxt& input, int32_t index, uint32_t cyclotomic_order,
                           const Digits& digits) {
-        return measure("fast_rotation", "eval_fast_rotation_" + std::to_string(index), [&] {
-            return context_->EvalFastRotation(input, index, cyclotomic_order, digits);
-        });
+        ProfileScope profile("fast_rotation", prefix_ + "_eval_fast_rotation_" +
+                                              std::to_string(index));
+        profile.setRotationIndex(index);
+        return context_->EvalFastRotation(input, index, cyclotomic_order, digits);
     }
 
     Ctxt EvalRotate(const Ctxt& input, int32_t index) {
-        return measure("rotation", "eval_rotate_" + std::to_string(index), [&] {
-            return context_->EvalRotate(input, index);
-        });
+        ProfileScope profile("rotation", prefix_ + "_eval_rotate_" +
+                                          std::to_string(index));
+        profile.setRotationIndex(index);
+        return context_->EvalRotate(input, index);
     }
 
     Ctxt EvalMult(const Ctxt& input, const Ptxt& plaintext) {
@@ -420,6 +422,7 @@ void FHEController::load_bootstrapping_and_rotation_keys(const string& filename,
             profile.fail();
             throw runtime_error("Could not deserialize eval rot key file " + path);
         }
+        OperationProfiler::instance().setRotationKeySet(filename);
     }
 
     if (verbose) cout << "(2/2) Rotation keys read!" << endl;
@@ -448,6 +451,7 @@ void FHEController::load_rotation_keys(const string& filename, bool verbose) {
             profile.fail();
             throw runtime_error("Could not deserialize eval rot key file " + path);
         }
+        OperationProfiler::instance().setRotationKeySet(filename);
     }
 
     if (verbose) {
@@ -468,6 +472,7 @@ void FHEController::clear_bootstrapping_and_rotation_keys(int bootstrap_num_slot
 
 void FHEController::clear_rotation_keys() {
     context->ClearEvalAutomorphismKeys();
+    OperationProfiler::instance().setRotationKeySet("");
 }
 
 void FHEController::clear_context(int bootstrapping_key_slots) {
@@ -560,6 +565,12 @@ Ctxt FHEController::mult(const Ctxt &c1, double d) {
 
 Ctxt FHEController::mult(const Ctxt &c, const Ptxt& p) {
     return context->EvalMult(c, p);
+}
+
+Ctxt FHEController::profiled_rotate(const Ctxt& c, std::int32_t index) {
+    ProfileScope profile("rotation", "eval_rotate_" + std::to_string(index));
+    profile.setRotationIndex(index);
+    return context->EvalRotate(c, index);
 }
 
 Ctxt FHEController::bootstrap(const Ctxt &c, bool timing) {
@@ -1278,10 +1289,10 @@ Ctxt FHEController::downsample1024to256(const Ctxt &c1, const Ctxt &c2) {
     /*
      * We first juxtapose the values in the rows
      */
-    fullpack = context->EvalMult(context->EvalAdd(fullpack, context->EvalRotate(fullpack, 1)), gen_mask(2, fullpack->GetLevel()));
-    fullpack = context->EvalMult(context->EvalAdd(fullpack, context->EvalRotate(context->EvalRotate(fullpack, 1), 1)), gen_mask(4, fullpack->GetLevel()));
-    fullpack = context->EvalMult(context->EvalAdd(fullpack, context->EvalRotate(fullpack, 4)), gen_mask(8, fullpack->GetLevel()));
-    fullpack = context->EvalAdd(fullpack, context->EvalRotate(fullpack, 8));
+    fullpack = context->EvalMult(context->EvalAdd(fullpack, profiled_rotate(fullpack, 1)), gen_mask(2, fullpack->GetLevel()));
+    fullpack = context->EvalMult(context->EvalAdd(fullpack, profiled_rotate(profiled_rotate(fullpack, 1), 1)), gen_mask(4, fullpack->GetLevel()));
+    fullpack = context->EvalMult(context->EvalAdd(fullpack, profiled_rotate(fullpack, 4)), gen_mask(8, fullpack->GetLevel()));
+    fullpack = context->EvalAdd(fullpack, profiled_rotate(fullpack, 8));
 
     Ctxt downsampledrows = encrypt({0});
 
@@ -1293,7 +1304,7 @@ Ctxt FHEController::downsample1024to256(const Ctxt &c1, const Ctxt &c2) {
         Ctxt masked = context->EvalMult(fullpack, mask_first_n_mod(16, 1024, i, fullpack->GetLevel()));
         downsampledrows = context->EvalAdd(downsampledrows, masked);
         if (i < 15) {
-            fullpack = context->EvalRotate(fullpack, 64 - 16); //Si può fare fast
+            fullpack = profiled_rotate(fullpack, 64 - 16); //Si può fare fast
         }
     }
 
@@ -1304,12 +1315,14 @@ Ctxt FHEController::downsample1024to256(const Ctxt &c1, const Ctxt &c2) {
     for (int i = 0; i < 32; i++) {
         Ctxt masked = context->EvalMult(downsampledrows, mask_channel(i, downsampledrows->GetLevel()));
         downsampledchannels = context->EvalAdd(downsampledchannels, masked);
-        downsampledchannels = context->EvalRotate(downsampledchannels, -(1024 - 256));
+        downsampledchannels = profiled_rotate(downsampledchannels, -(1024 - 256));
     }
 
-    downsampledchannels = context->EvalRotate(downsampledchannels, (1024 - 256) * 32);
-    downsampledchannels = context->EvalAdd(downsampledchannels, context->EvalRotate(downsampledchannels, -8192));
-    downsampledchannels = context->EvalAdd(downsampledchannels, context->EvalRotate(context->EvalRotate(downsampledchannels, -8192), -8192));
+    downsampledchannels = profiled_rotate(downsampledchannels, (1024 - 256) * 32);
+    downsampledchannels = context->EvalAdd(downsampledchannels, profiled_rotate(downsampledchannels, -8192));
+    downsampledchannels = context->EvalAdd(
+        downsampledchannels,
+        profiled_rotate(profiled_rotate(downsampledchannels, -8192), -8192));
 
     downsampledchannels->SetSlots(8192);
 
@@ -1326,9 +1339,9 @@ Ctxt FHEController::downsample256to64(const Ctxt &c1, const Ctxt &c2) {
     Ctxt fullpack = add(mult(c1, mask_first_n(8192, c1->GetLevel())), mult(c2, mask_second_n(8192, c2->GetLevel())));
 
     //Affianco tutte le righe
-    fullpack = context->EvalMult(context->EvalAdd(fullpack, context->EvalRotate(fullpack, 1)), gen_mask(2, fullpack->GetLevel()));
-    fullpack = context->EvalMult(context->EvalAdd(fullpack, context->EvalRotate(context->EvalRotate(fullpack, 1), 1)), gen_mask(4, fullpack->GetLevel()));
-    fullpack = context->EvalAdd(fullpack, context->EvalRotate(fullpack, 4));
+    fullpack = context->EvalMult(context->EvalAdd(fullpack, profiled_rotate(fullpack, 1)), gen_mask(2, fullpack->GetLevel()));
+    fullpack = context->EvalMult(context->EvalAdd(fullpack, profiled_rotate(profiled_rotate(fullpack, 1), 1)), gen_mask(4, fullpack->GetLevel()));
+    fullpack = context->EvalAdd(fullpack, profiled_rotate(fullpack, 4));
 
     Ctxt downsampledrows = encrypt({0});
 
@@ -1336,7 +1349,7 @@ Ctxt FHEController::downsample256to64(const Ctxt &c1, const Ctxt &c2) {
         Ctxt masked = context->EvalMult(fullpack, mask_first_n_mod2(8, 256, i, fullpack->GetLevel()));
         downsampledrows = context->EvalAdd(downsampledrows, masked);
         if (i < 31) {
-            fullpack = context->EvalRotate(fullpack, 32 - 8);
+            fullpack = profiled_rotate(fullpack, 32 - 8);
         }
     }
 
@@ -1349,16 +1362,18 @@ Ctxt FHEController::downsample256to64(const Ctxt &c1, const Ctxt &c2) {
         //N.B. se ruoto downsampledrows posso farle fast
         Ctxt masked = context->EvalMult(downsampledrows, mask_channel_2(i, downsampledrows->GetLevel()));
         downsampledchannels = context->EvalAdd(downsampledchannels, masked);
-        downsampledchannels = context->EvalRotate(downsampledchannels, -(256 - 64));
+        downsampledchannels = profiled_rotate(downsampledchannels, -(256 - 64));
     }
 
     //Qua e giusto....
     //print(downsampledchannels, 16384);
     //exit(1);
 
-    downsampledchannels = context->EvalRotate(downsampledchannels, (256 - 64) * 64);
-    downsampledchannels = context->EvalAdd(downsampledchannels, context->EvalRotate(downsampledchannels, -4096));
-    downsampledchannels = context->EvalAdd(downsampledchannels, context->EvalRotate(context->EvalRotate(downsampledchannels, -4096), -4096));
+    downsampledchannels = profiled_rotate(downsampledchannels, (256 - 64) * 64);
+    downsampledchannels = context->EvalAdd(downsampledchannels, profiled_rotate(downsampledchannels, -4096));
+    downsampledchannels = context->EvalAdd(
+        downsampledchannels,
+        profiled_rotate(profiled_rotate(downsampledchannels, -4096), -4096));
 
     downsampledchannels->SetSlots(4096);
 
@@ -1370,7 +1385,7 @@ Ctxt FHEController::rotsum(const Ctxt &in, int slots) {
     Ctxt result = in->Clone();
 
     for (int i = 0; i < log2(slots); i++) {
-        result = add(result, context->EvalRotate(result, pow(2, i)));
+        result = add(result, profiled_rotate(result, static_cast<std::int32_t>(pow(2, i))));
     }
 
     return result;
@@ -1380,14 +1395,15 @@ Ctxt FHEController::rotsum_padded(const Ctxt &in, int slots) {
     Ctxt result = in->Clone();
 
     for (int i = 0; i < log2(slots); i++) {
-        result = add(result, context->EvalRotate(result, slots * pow(2, i)));
+        result = add(result, profiled_rotate(
+            result, static_cast<std::int32_t>(slots * pow(2, i))));
     }
 
     return result;
 }
 
 Ctxt FHEController::repeat(const Ctxt &in, int slots) {
-    return context->EvalRotate(rotsum(in, slots), -slots + 1);
+    return profiled_rotate(rotsum(in, slots), -slots + 1);
 }
 
 Ctxt FHEController::convbn1632sxV2(const Ctxt &in, int layer, int n, double scale, bool timing) {

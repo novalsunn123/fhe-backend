@@ -1,0 +1,72 @@
+name: FHE staged 10-image benchmark
+
+on:
+  push:
+    branches:
+      - dev
+      - agent/rotation-key-audit
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fhe-benchmark-batch10
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: >-
+      github.ref == 'refs/heads/dev' ||
+      github.ref == 'refs/heads/agent/rotation-key-audit'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 240
+    env:
+      FHE_EXPERIMENT: "1"
+      FHE_BATCH_MANIFEST: CICD/benchmark10-images.tsv
+      FHE_BATCH_EXPECTED_COUNT: "10"
+      CICD_BUILD_JOBS: "2"
+      CICD_WEIGHTS_DIR: /home/fhe-runner/CICD/assets/weights
+      CICD_REPORT_DIR: /home/fhe-runner/CICD/reports/batch10-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CICD_BATCH_BASELINE_FILE: /home/fhe-runner/CICD/state/dev-batch10-baseline.json
+
+    steps:
+      - name: Checkout dev commit
+        uses: actions/checkout@v6
+        with:
+          clean: true
+
+      - name: Validate fixed benchmark set
+        run: ./CICD/validate_batch_manifest.sh "$GITHUB_WORKSPACE" "$FHE_BATCH_MANIFEST" "$FHE_BATCH_EXPECTED_COUNT"
+
+      - name: Run staged 10-image FHE benchmark
+        run: ./CICD/run_batch10_baseline.sh
+
+      - name: Update successful batch baseline
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          jq -e --arg sha "${{ github.sha }}" \
+            '.status == "passed" and .commit == $sha and
+             .schema_version == 1 and .benchmark_type == "staged_batch10" and
+             .result.image_count == 10 and .result.successful_count == 10' \
+            "$CICD_REPORT_DIR/batch10-benchmark.json" >/dev/null
+          install -d -m 0750 "$(dirname "$CICD_BATCH_BASELINE_FILE")"
+          install -m 0640 "$CICD_REPORT_DIR/batch10-benchmark.json" "$CICD_BATCH_BASELINE_FILE"
+
+      - name: Publish batch benchmark summary
+        if: always()
+        run: |
+          if [[ -f "$CICD_REPORT_DIR/batch10-summary.md" ]]; then
+            cat "$CICD_REPORT_DIR/batch10-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "# FHE staged 10-image benchmark" >> "$GITHUB_STEP_SUMMARY"
+            echo "Batch benchmark report was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload batch benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fhe-batch10-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CICD_REPORT_DIR }}
+          if-no-files-found: warn
+          retention-days: 30

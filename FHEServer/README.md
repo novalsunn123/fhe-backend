@@ -16,6 +16,32 @@ cmake --build . -j2
 
 Return `encrypted-result.bin` to the client. The server does not decrypt it.
 
+## Staged multi-image inference
+
+For multiple ciphertexts, `infer_batch` processes the workload layer by layer so
+each rotation-key set is deserialized once. The tab-separated manifest has no
+header and contains one input/output pair per line:
+
+```text
+../ciphertexts/01-input.bin\t../results/01-result.bin
+../ciphertexts/02-input.bin\t../results/02-result.bin
+```
+
+Run from `FHEServer/build` with an empty checkpoint directory:
+
+```bash
+./FHEServer infer_batch 1 \
+  ../batch-jobs.tsv \
+  ../checkpoints/batch \
+  ../results/batch-metrics.tsv 1
+```
+
+Intermediate ciphertexts are serialized per image between key stages and
+deleted immediately after the next stage consumes them. The metrics TSV reports
+per-image circuit and layer time. This mode does not receive a secret key and
+does not change CKKS parameters, model weights, data layout, bootstrapping
+placement, or the order of homomorphic operations within an image.
+
 `weights` currently points to the original project's exported weights to avoid
 duplicating about 1.3 GB. Replace the symlink with a copied `weights/` directory
 when deploying the server to another machine.
@@ -37,9 +63,21 @@ FHEServer can emit context/key-loading, layer, residual-block, convolution,
 activation, downsample, and bootstrap timings without changing the FHE circuit.
 The convolution breakdown separately measures weight-file open/read/text parse,
 plaintext encoding, rotation precomputation, every fast/regular rotation,
-plaintext multiplication, ciphertext addition, and `EvalAddMany`. JSON schema 2
+plaintext multiplication, ciphertext addition, and `EvalAddMany`. JSON schema 3
 contains aggregate count/total/average/maximum values while CSV retains every
 individual event and its layer/block context.
+
+It also records the active rotation-key file and signed rotation
+index for every application-level rotation. The Markdown report compares the
+observed indices with the shared key-generation schedule in
+`Common/RotationKeySchedule.h`. Missing indices are reported only as candidates
+for a later pruning experiment; inference never removes keys automatically.
+
+The shared schedule omits rotation index `2` from the layer 2 and layer 3
+downsample key sets. A complete profiled inference observed no application use
+of those two keys, while the downsample sets contain no bootstrapping keys.
+Regenerate the client/server evaluation keys after changing this schedule.
+
 Profiling is disabled by default. Enable it with:
 
 ```bash

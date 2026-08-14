@@ -1,0 +1,11 @@
+# Relative image path	Expected class
+FHEClient/inputs/benchmark10/Handgun/2001_0.png	Handgun
+FHEClient/inputs/benchmark10/Handgun/2002_0.png	Handgun
+FHEClient/inputs/benchmark10/Handgun/2003_0.png	Handgun
+FHEClient/inputs/benchmark10/Handgun/2004_0.png	Handgun
+FHEClient/inputs/benchmark10/Handgun/2005_0.png	Handgun
+FHEClient/inputs/benchmark10/Knife/4079_0.png	Knife
+FHEClient/inputs/benchmark10/Knife/4080_0.png	Knife
+FHEClient/inputs/benchmark10/Knife/4081_0.png	Knife
+FHEClient/inputs/benchmark10/Knife/4082_0.png	Knife
+FHEClient/inputs/benchmark10/Knife/4083_0.png	Knife
