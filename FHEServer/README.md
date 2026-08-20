@@ -42,6 +42,19 @@ per-image circuit and layer time. This mode does not receive a secret key and
 does not change CKKS parameters, model weights, data layout, bootstrapping
 placement, or the order of homomorphic operations within an image.
 
+The default safety limit is 20 images per batch. A larger manifest is rejected
+before any rotation-key file is loaded. Operators may deliberately override the
+limit, up to the hard maximum of 1000, for a controlled environment:
+
+```bash
+FHE_BATCH_MAX_IMAGES=40 ./FHEServer infer_batch 1 \
+  ../batch-jobs.tsv ../checkpoints/batch ../results/batch-metrics.tsv 1
+```
+
+For the current 24 GB host, batches of 10 are recommended for CI and batches of
+10–20 for full-validation jobs. Splitting a large dataset limits checkpoint and
+profiler growth and reduces the amount of work lost if a long process fails.
+
 `weights` currently points to the original project's exported weights to avoid
 duplicating about 1.3 GB. Replace the symlink with a copied `weights/` directory
 when deploying the server to another machine.

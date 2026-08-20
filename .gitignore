@@ -20,8 +20,25 @@
 *.log
 *.pid
 *.lock
+nohup.out
 core
 core.*
+
+# Không đưa checkpoint/model archive hoặc binary sinh ra ngoài build
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npy
+*.npz
+*.bin
+
+# Không đưa báo cáo và trạng thái runtime cục bộ
+/CICD/reports/
+/CICD/state/
+/reports/
+/runtime/
+/.cache/
 
 # Ghi chú tạm dùng làm nội dung PR/lịch sử phiên bản dev
 /.agent-change-note.md

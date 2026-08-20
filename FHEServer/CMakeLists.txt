@@ -18,6 +18,8 @@ link_libraries(${OpenFHE_SHARED_LIBRARIES})
 
 add_executable(FHEServer
         src/main.cpp
+        src/BatchPolicy.cpp
+        src/BatchPolicy.h
         src/FHEController.cpp
         src/FHEController.h
         src/PackedWeights.cpp
@@ -71,4 +73,11 @@ if(BUILD_TESTING)
     add_test(NAME FHEServerPackedWeightsTest
             COMMAND FHEServerPackedWeightsTest
                     ${CMAKE_CURRENT_BINARY_DIR}/packed-weights-test)
+
+    add_executable(FHEServerBatchPolicyTest
+            tests/BatchPolicyTest.cpp
+            src/BatchPolicy.cpp
+            src/BatchPolicy.h)
+    target_include_directories(FHEServerBatchPolicyTest PRIVATE src)
+    add_test(NAME FHEServerBatchPolicyTest COMMAND FHEServerBatchPolicyTest)
 endif()

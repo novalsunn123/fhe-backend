@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "BatchPolicy.h"
 #include "FHEController.h"
 #include "Profiler.h"
 
@@ -107,7 +108,7 @@ string trimCarriageReturn(string value) {
     return value;
 }
 
-vector<BatchJob> readBatchManifest() {
+vector<BatchJob> readBatchManifest(size_t max_images) {
     ifstream manifest(batch_manifest_filename);
     if (!manifest.is_open()) {
         throw runtime_error("Cannot open batch manifest: " + batch_manifest_filename);
@@ -142,6 +143,7 @@ vector<BatchJob> readBatchManifest() {
         name << "image-" << setw(2) << setfill('0') << job.index;
         job.checkpoint_directory = filesystem::path(batch_checkpoint_directory) / name.str();
         jobs.push_back(std::move(job));
+        batch_policy::enforceImageCount(jobs.size(), max_images);
     }
     if (jobs.empty()) throw runtime_error("Batch manifest contains no jobs");
     return jobs;
@@ -235,7 +237,8 @@ void removeDownsampled(const BatchJob& job, const string& prefix) {
 }  // namespace
 
 void executeResNet20Batch() {
-    vector<BatchJob> jobs = readBatchManifest();
+    const size_t max_images = batch_policy::configuredMaxImages();
+    vector<BatchJob> jobs = readBatchManifest(max_images);
     const filesystem::path checkpoint_root(batch_checkpoint_directory);
     if (checkpoint_root.empty() || checkpoint_root == checkpoint_root.root_path()) {
         throw runtime_error("Unsafe batch checkpoint directory");
@@ -248,7 +251,8 @@ void executeResNet20Batch() {
     for (const auto& job : jobs) filesystem::create_directories(job.checkpoint_directory);
 
     if (verbose >= 0) {
-        cout << "Encrypted ResNet20 staged batch started for " << jobs.size() << " images." << endl;
+        cout << "Encrypted ResNet20 staged batch started for " << jobs.size()
+             << " images (configured maximum: " << max_images << ")." << endl;
     }
     const auto batch_started = steady_clock::now();
     ProfileScope circuit_profile("pipeline", "fhe_circuit", "Batch", "");
