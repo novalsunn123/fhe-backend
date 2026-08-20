@@ -67,6 +67,85 @@ Trong workspace huấn luyện hiện tại, trọng số được export từ c
 và notebook đóng gói của model, nên chúng phải được quản lý như một artifact
 training riêng.
 
+### 3.1. Fine-tune checkpoint đang dùng cho FHE
+
+Model triển khai hiện tại không train từ đầu. Chuỗi checkpoint là:
+
+```text
+training/outputs/best.pt
+    -> fine-tune FHE ban đầu
+training/outputs_fhe/best.pt
+    -> fine-tune siết activation range
+training/outputs_fhe_selected/best.pt
+    -> export thành FHEServer/weights
+```
+
+Checkpoint đầu vào trực tiếp của lần fine-tune cuối là:
+
+```text
+training/outputs_fhe/best.pt
+```
+
+Checkpoint này đạt 94,21% plaintext validation, dùng
+`activation_bound=0.8`, `range_penalty=5`, có max `|pre-ReLU|` khoảng 3,102 và
+khoảng 0,327% activation nằm ngoài `[-1,1]`.
+
+Lệnh tạo model được chọn cuối cùng:
+
+```bash
+cd LowMemoryFHEWeaponResNet20_v1/training
+
+python3 train_weapon.py \
+  --data-dir data \
+  --output-dir outputs_fhe_selected \
+  --init-checkpoint outputs_fhe/best.pt \
+  --epochs 40 \
+  --batch-size 128 \
+  --lr 0.0005 \
+  --activation-bound 0.40 \
+  --range-penalty 100 \
+  --stem-range-penalty 200
+```
+
+`best.pt` được chọn tại epoch lưu số 10, với các số liệu:
+
+| Chỉ số | Giá trị |
+|---|---:|
+| Plaintext validation | 175/190 — 92,11% |
+| Max `|pre-ReLU|` | 2,264 |
+| Phân vị 99,9% `|pre-ReLU|` | 0,962 |
+| Activation ngoài `[-1,1]` | 0,0474% |
+
+Mục tiêu của `activation-bound`, `range-penalty` và `stem-range-penalty` là ép
+phần lớn giá trị đi vào miền xấp xỉ ReLU của circuit FHE, giảm approximation
+error mà vẫn giữ accuracy. Sau khi export checkpoint này và chạy staged
+full-validation 190 ảnh, hệ thống đạt 172/190 (90,53%) và không có decrypt
+error.
+
+Export checkpoint thành text weights tại workspace training:
+
+```bash
+cd LowMemoryFHEWeaponResNet20_v1
+
+python3 export_weapon_weights.py \
+  --checkpoint training/outputs_fhe_selected/best.pt
+```
+
+Sau đó cấp weights cho backend và build lại server để tái tạo binary archive:
+
+```bash
+cp -a LowMemoryFHEWeaponResNet20_v1/weights/. \
+  fhe-backend/FHEServer/weights/
+
+cmake -S fhe-backend/FHEServer -B fhe-backend/FHEServer/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/usr/local
+cmake --build fhe-backend/FHEServer/build --parallel 2
+```
+
+Không dùng đồng thời checkpoint của model này với weights/key/ciphertext của
+một lần export hoặc crypto context khác khi so sánh kết quả.
+
 ## 4. Build Client và Server
 
 Chạy tại root của repository:
