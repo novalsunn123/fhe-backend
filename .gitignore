@@ -1,24 +1,37 @@
-# Không đưa thư mục build
-/FHEClient/build/
-/FHEServer/build/
-/data/
-# Không đưa khóa FHE
-/FHEClient/keys_exp*/
-/FHEClient/server_keys_exp*/
-/FHEServer/keys_exp*/
+# Git/GitHub metadata lồng nhau
+**/.git/
+**/.github/
 
-# Không đưa model weights
-/FHEServer/weights/
+# Build và cache
+**/build/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.cache/
+*.o
+*.a
+*.so
+*.pyc
 
-# Không đưa ciphertext và kết quả
-/FHEClient/ciphertexts/
-/FHEServer/ciphertexts/
-/FHEServer/results/
-/FHEServer/checkpoints/
+# FHE keys và runtime artifacts
+**/keys_exp*/
+**/server_keys_exp*/
+**/ciphertexts/
+**/results/
+**/runtime/
+**/checkpoints/
 
-# Không đưa log, PID và core dump
+# Model artifacts được export/sinh lại
+**/weights/
+*.bin
+
+# Log và trạng thái tiến trình
 *.log
 *.pid
 *.lock
+nohup.out
 core
 core.*
+
+# Báo cáo sweep/training sinh tự động
+**/fhe_sweep_results/
