@@ -762,6 +762,7 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
+    // Compute each cardinal direction once; diagonal rotations reuse these ciphertexts.
     const Ctxt left = profiled_context.EvalFastRotation(
             in, -padding, context->GetCyclotomicOrder(), digits);
     const Ctxt right = profiled_context.EvalFastRotation(
