@@ -762,19 +762,25 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    // Compute each cardinal direction once; diagonal rotations reuse these ciphertexts.
+    const Ctxt left = profiled_context.EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = profiled_context.EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt up = profiled_context.EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = profiled_context.EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
+
+    c_rotations.push_back(profiled_context.EvalRotate(left, -img_width));
+    c_rotations.push_back(up);
+    c_rotations.push_back(profiled_context.EvalRotate(right, -img_width));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+    c_rotations.push_back(right);
+    c_rotations.push_back(profiled_context.EvalRotate(left, img_width));
+    c_rotations.push_back(down);
+    c_rotations.push_back(profiled_context.EvalRotate(right, img_width));
 
     Ptxt bias = encode(read_values_from_file("../weights/conv1bn1-bias.bin", scale), in->GetLevel(), 16384);
 
@@ -794,9 +800,10 @@ Ctxt FHEController::convbn_initial(const Ctxt &in, double scale, bool timing) {
 
         Ctxt res = sum->Clone();
 
-        res = profiled_context.EvalAdd(res, profiled_context.EvalRotate(sum, 1024));
+        const Ctxt rotated_once = profiled_context.EvalRotate(sum, 1024);
+        res = profiled_context.EvalAdd(res, rotated_once);
         res = profiled_context.EvalAdd(
-            res, profiled_context.EvalRotate(profiled_context.EvalRotate(sum, 1024), 1024));
+            res, profiled_context.EvalRotate(rotated_once, 1024));
         res = profiled_context.EvalMult(res, mask_from_to(0, 1024, res->GetLevel()));
 
 
@@ -833,21 +840,24 @@ Ctxt FHEController::convbn(const Ctxt &in, int layer, int n, double scale, bool 
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
-    //TODO: combinations of rotations in order to perform only 8 rotations
+    const Ctxt left = profiled_context.EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = profiled_context.EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt up = profiled_context.EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = profiled_context.EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
 
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalRotate(left, -img_width));
+    c_rotations.push_back(up);
+    c_rotations.push_back(profiled_context.EvalRotate(right, -img_width));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+    c_rotations.push_back(right);
+    c_rotations.push_back(profiled_context.EvalRotate(left, img_width));
+    c_rotations.push_back(down);
+    c_rotations.push_back(profiled_context.EvalRotate(right, img_width));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), in->GetLevel(), 16384);
 
@@ -896,21 +906,24 @@ Ctxt FHEController::convbn2(const Ctxt &in, int layer, int n, double scale, bool
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
-    //TODO: combinations of rotations in order to perform only 8 rotations
+    const Ctxt left = profiled_context.EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = profiled_context.EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt up = profiled_context.EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = profiled_context.EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
 
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalRotate(left, -img_width));
+    c_rotations.push_back(up);
+    c_rotations.push_back(profiled_context.EvalRotate(right, -img_width));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+    c_rotations.push_back(right);
+    c_rotations.push_back(profiled_context.EvalRotate(left, img_width));
+    c_rotations.push_back(down);
+    c_rotations.push_back(profiled_context.EvalRotate(right, img_width));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), circuit_depth-2, 8192);
 
@@ -959,21 +972,24 @@ Ctxt FHEController::convbn3(const Ctxt &in, int layer, int n, double scale, bool
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
-    //TODO: combinations of rotations in order to perform only 8 rotations
+    const Ctxt left = profiled_context.EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = profiled_context.EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt up = profiled_context.EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = profiled_context.EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
 
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    c_rotations.push_back(profiled_context.EvalRotate(left, -img_width));
+    c_rotations.push_back(up);
+    c_rotations.push_back(profiled_context.EvalRotate(right, -img_width));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+    c_rotations.push_back(right);
+    c_rotations.push_back(profiled_context.EvalRotate(left, img_width));
+    c_rotations.push_back(down);
+    c_rotations.push_back(profiled_context.EvalRotate(right, img_width));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), c_rotations[0]->GetLevel(), 4096);
 
@@ -1022,19 +1038,24 @@ vector<Ctxt> FHEController::convbn1632sx(const Ctxt &in, int layer, int n, doubl
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    const Ctxt up = profiled_context.EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = profiled_context.EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt left = profiled_context.EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = profiled_context.EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+
+    c_rotations.push_back(profiled_context.EvalRotate(up, -padding));
+    c_rotations.push_back(up);
+    c_rotations.push_back(profiled_context.EvalRotate(up, padding));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
+    c_rotations.push_back(right);
+    c_rotations.push_back(profiled_context.EvalRotate(down, -padding));
+    c_rotations.push_back(down);
+    c_rotations.push_back(profiled_context.EvalRotate(down, padding));
 
     vector<Ctxt> applied_filters16;
     vector<Ctxt> applied_filters32;
@@ -1155,19 +1176,24 @@ vector<Ctxt> FHEController::convbn3264sx(const Ctxt &in, int layer, int n, doubl
 
     auto digits = profiled_context.EvalFastRotationPrecompute(in);
 
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    const Ctxt up = profiled_context.EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = profiled_context.EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt left = profiled_context.EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = profiled_context.EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+
+    c_rotations.push_back(profiled_context.EvalRotate(up, -padding));
+    c_rotations.push_back(up);
+    c_rotations.push_back(profiled_context.EvalRotate(up, padding));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(profiled_context.EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            profiled_context.EvalRotate(profiled_context.EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
+    c_rotations.push_back(right);
+    c_rotations.push_back(profiled_context.EvalRotate(down, -padding));
+    c_rotations.push_back(down);
+    c_rotations.push_back(profiled_context.EvalRotate(down, padding));
 
     vector<Ctxt> applied_filters32;
     vector<Ctxt> applied_filters64;
@@ -1419,19 +1445,24 @@ Ctxt FHEController::convbn1632sxV2(const Ctxt &in, int layer, int n, double scal
 
     auto digits = context->EvalFastRotationPrecompute(in);
 
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -(img_width), context->GetCyclotomicOrder(), digits), padding));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    const Ctxt up = context->EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = context->EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt left = context->EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = context->EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+
+    c_rotations.push_back(context->EvalRotate(up, -padding));
+    c_rotations.push_back(up);
+    c_rotations.push_back(context->EvalRotate(up, padding));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), -padding));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, (img_width), context->GetCyclotomicOrder(), digits), padding));
+    c_rotations.push_back(right);
+    c_rotations.push_back(context->EvalRotate(down, -padding));
+    c_rotations.push_back(down);
+    c_rotations.push_back(context->EvalRotate(down, padding));
 
     vector<Ctxt> applied_filters16;
     vector<Ctxt> applied_filters32;
@@ -1541,19 +1572,24 @@ Ctxt FHEController::convbnV2(const Ctxt &in, int layer, int n, double scale, boo
 
     auto digits = context->EvalFastRotationPrecompute(in);
 
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), -img_width ));
-    c_rotations.push_back(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits));
+    const Ctxt left = context->EvalFastRotation(
+            in, -padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt right = context->EvalFastRotation(
+            in, padding, context->GetCyclotomicOrder(), digits);
+    const Ctxt up = context->EvalFastRotation(
+            in, -img_width, context->GetCyclotomicOrder(), digits);
+    const Ctxt down = context->EvalFastRotation(
+            in, img_width, context->GetCyclotomicOrder(), digits);
+
+    c_rotations.push_back(context->EvalRotate(left, -img_width));
+    c_rotations.push_back(up);
+    c_rotations.push_back(context->EvalRotate(right, -img_width));
+    c_rotations.push_back(left);
     c_rotations.push_back(in);
-    c_rotations.push_back(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, -padding, context->GetCyclotomicOrder(), digits), img_width));
-    c_rotations.push_back(context->EvalFastRotation(in, img_width, context->GetCyclotomicOrder(), digits));
-    c_rotations.push_back(
-            context->EvalRotate(context->EvalFastRotation(in, padding, context->GetCyclotomicOrder(), digits), img_width ));
+    c_rotations.push_back(right);
+    c_rotations.push_back(context->EvalRotate(left, img_width));
+    c_rotations.push_back(down);
+    c_rotations.push_back(context->EvalRotate(right, img_width));
 
     Ptxt bias = encode(read_values_from_file("../weights/layer" + to_string(layer) + "-conv" + to_string(n) + "bn" + to_string(n) + "-bias.bin", scale), in->GetLevel(), 8192);
 
