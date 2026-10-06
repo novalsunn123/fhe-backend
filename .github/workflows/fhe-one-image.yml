@@ -20,7 +20,7 @@ jobs:
       FHE_EXPERIMENT: "1"
       FHE_TEST_IMAGE: FHEClient/inputs/2041_0.png
       FHE_BINARY_WEIGHTS: "1"
-      FHE_PROFILE: "0"
+      FHE_PROFILE: "1"
       CICD_BUILD_JOBS: "2"
       CICD_WEIGHTS_DIR: ${{ github.workspace }}/LowMemoryFHEWeaponResNet20_v1/weights
       CICD_REPORT_DIR: ${{ github.workspace }}/.ci-reports/fhe-one-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -101,6 +101,17 @@ jobs:
           set -Eeuo pipefail
           grep -Fxq 'Prediction: Handgun' "$CICD_REPORT_DIR/logs/decryption.log"
           echo 'Selected checkpoint classified 2041_0.png as Handgun.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize FHE operation profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          profile="$CICD_REPORT_DIR/fhe-operation-profile.json"
+          test -s "$profile"
+          jq -e '.status == "passed" and .bootstrap_summary.count > 0' "$profile" > /dev/null
+          profile_summary="$(jq -c '{bootstrap: (.bootstrap_summary | {count, total_seconds, average_seconds, slowest_event}), duration: .duration_summary, convolution_seconds: (.convolution_operation_summary | with_entries(.value |= .total_seconds))}' "$profile")"
+          echo "::notice title=FHE operation profile::$profile_summary"
+          sed -n '1,22p' "$CICD_REPORT_DIR/fhe-operation-profile.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload non-sensitive benchmark report
         if: always()

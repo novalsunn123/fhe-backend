@@ -91,7 +91,7 @@ Mỗi lần push lên nhánh `agent/rebuild-cicd`, workflow
 `.github/workflows/fhe-one-image.yml` export weights từ checkpoint
 `LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt`, build
 client/server, sinh key mới, mã hóa ảnh `2041_0.png`, suy luận FHE và giải mã.
-Workflow yêu cầu kết quả là `Handgun` và upload báo cáo benchmark; key,
+Workflow yêu cầu kết quả là `Handgun`, bật operation profiler và upload báo cáo benchmark; key,
 ciphertext và weights không được upload.
 
 Job chạy trên runner tự quản lý có nhãn `self-hosted`, `linux`, `x64`. Workflow
