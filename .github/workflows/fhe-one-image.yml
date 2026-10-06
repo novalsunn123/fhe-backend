@@ -23,7 +23,7 @@ jobs:
       FHE_PROFILE: "0"
       CICD_BUILD_JOBS: "2"
       CICD_WEIGHTS_DIR: ${{ github.workspace }}/LowMemoryFHEWeaponResNet20_v1/weights
-      CICD_REPORT_DIR: ${{ runner.temp }}/fhe-one-image-${{ github.run_id }}-${{ github.run_attempt }}
+      CICD_REPORT_DIR: ${{ github.workspace }}/.ci-reports/fhe-one-image-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout source and selected checkpoint
