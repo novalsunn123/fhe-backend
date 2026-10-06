@@ -3,6 +3,7 @@
 //
 
 #include "FHEController.h"
+#include "BufferedKeyInput.h"
 
 void FHEController::generate_context(bool serialize) {
     CCParams<CryptoContextCKKSRNS> parameters;
@@ -376,13 +377,14 @@ void FHEController::load_bootstrapping_and_rotation_keys(const string& filename,
     if (verbose)  cout << "(1/2) Bootstrapping precomputations completed!" << endl;
 
 
-    ifstream rotKeyIStream("../" + parameters_folder + "/rot_" + filename, ios::in | ios::binary);
-    if (!rotKeyIStream.is_open()) {
+    const string path = "../" + parameters_folder + "/rot_" + filename;
+    fhe::BufferedKeyInput rotKeyInput(path);
+    if (!rotKeyInput.isOpen()) {
         cerr << "Cannot read serialization from " << "../" + parameters_folder + "/" << "rot_" << filename << std::endl;
         exit(1);
     }
 
-    if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
+    if (!context->DeserializeEvalAutomorphismKey(rotKeyInput.stream(), SerType::BINARY)) {
         cerr << "Could not deserialize eval rot key file" << std::endl;
         exit(1);
     }
@@ -399,13 +401,14 @@ void FHEController::load_rotation_keys(const string& filename, bool verbose) {
 
     auto start = start_time();
 
-    ifstream rotKeyIStream("../" + parameters_folder + "/rot_" + filename, ios::in | ios::binary);
-    if (!rotKeyIStream.is_open()) {
+    const string path = "../" + parameters_folder + "/rot_" + filename;
+    fhe::BufferedKeyInput rotKeyInput(path);
+    if (!rotKeyInput.isOpen()) {
         cerr << "Cannot read serialization from " << "../" + parameters_folder + "/" << "rot_" << filename << std::endl;
         exit(1);
     }
 
-    if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
+    if (!context->DeserializeEvalAutomorphismKey(rotKeyInput.stream(), SerType::BINARY)) {
         cerr << "Could not deserialize eval rot key file" << std::endl;
         exit(1);
     }

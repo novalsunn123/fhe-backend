@@ -8,6 +8,22 @@ Agent-authored source changes are submitted on `agent/*` pull requests. CI
 builds and benchmarks each candidate against the latest `dev` baseline, then
 publishes the measured deltas for manual review. CI never merges automatically.
 
+## Tinh chỉnh nạp evaluation keys
+
+`FHEClient` và `FHEServer` đọc serialized rotation/evaluation keys qua bộ đệm
+theo khối. Mặc định mỗi file dùng buffer 8 MiB; trên Linux, cùng file descriptor
+nhận sequential-access hint và readahead tối đa 32 MiB. Điều này không nạp trước
+toàn bộ bộ key vào RAM.
+
+Có thể benchmark các cấu hình khác bằng số byte thập phân, không cần sửa mã:
+
+```bash
+export FHE_KEY_IO_BUFFER_BYTES=8388608       # 64 KiB .. 64 MiB; mặc định 8 MiB
+export FHE_KEY_READAHEAD_BYTES=33554432      # 0 .. 64 MiB; 0 tắt prefetch
+```
+
+Giá trị thiếu, sai định dạng hoặc vượt giới hạn sẽ quay về mặc định an toàn.
+
 ## Lịch sử phiên bản dev
 
 Mỗi phiên bản được người quản lý chấp nhận thủ công sau khi đọc benchmark.
