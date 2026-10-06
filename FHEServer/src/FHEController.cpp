@@ -3,6 +3,7 @@
 //
 
 #include "FHEController.h"
+#include "BufferedKeyInput.h"
 #include "Profiler.h"
 
 namespace {
@@ -412,13 +413,13 @@ void FHEController::load_bootstrapping_and_rotation_keys(const string& filename,
         ProfileScope profile("key_load", "rotation_keys_" + filename);
         profile.setSlots(bootstrap_slots);
         profile.setFile(path);
-        ifstream rotKeyIStream(path, ios::in | ios::binary);
-        if (!rotKeyIStream.is_open()) {
+        fhe::BufferedKeyInput rotKeyInput(path);
+        if (!rotKeyInput.isOpen()) {
             profile.fail();
             throw runtime_error("Cannot read serialization from " + path);
         }
 
-        if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
+        if (!context->DeserializeEvalAutomorphismKey(rotKeyInput.stream(), SerType::BINARY)) {
             profile.fail();
             throw runtime_error("Could not deserialize eval rot key file " + path);
         }
@@ -441,13 +442,13 @@ void FHEController::load_rotation_keys(const string& filename, bool verbose) {
         const string path = "../" + parameters_folder + "/rot_" + filename;
         ProfileScope profile("key_load", "rotation_keys_" + filename);
         profile.setFile(path);
-        ifstream rotKeyIStream(path, ios::in | ios::binary);
-        if (!rotKeyIStream.is_open()) {
+        fhe::BufferedKeyInput rotKeyInput(path);
+        if (!rotKeyInput.isOpen()) {
             profile.fail();
             throw runtime_error("Cannot read serialization from " + path);
         }
 
-        if (!context->DeserializeEvalAutomorphismKey(rotKeyIStream, SerType::BINARY)) {
+        if (!context->DeserializeEvalAutomorphismKey(rotKeyInput.stream(), SerType::BINARY)) {
             profile.fail();
             throw runtime_error("Could not deserialize eval rot key file " + path);
         }

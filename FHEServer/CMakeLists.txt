@@ -71,4 +71,12 @@ if(BUILD_TESTING)
     add_test(NAME FHEServerPackedWeightsTest
             COMMAND FHEServerPackedWeightsTest
                     ${CMAKE_CURRENT_BINARY_DIR}/packed-weights-test)
+
+    add_executable(FHEServerBufferedKeyInputTest
+            tests/BufferedKeyInputTest.cpp)
+    target_include_directories(FHEServerBufferedKeyInputTest PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../Common)
+    add_test(NAME FHEServerBufferedKeyInputTest
+            COMMAND FHEServerBufferedKeyInputTest
+                    ${CMAKE_CURRENT_BINARY_DIR}/buffered-key-input-test.bin)
 endif()
