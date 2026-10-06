@@ -85,6 +85,22 @@ ctest --test-dir FHEBackend-batch-limit/FHEServer/build --output-on-failure
 Build server tạo lại `FHEServer/build/packed-weights.bin` từ 6.315 file text
 weights. Build output và weights không được lưu trong Git.
 
+## CI thử suy luận một ảnh
+
+Mỗi lần push lên nhánh `agent/rebuild-cicd`, workflow
+`.github/workflows/fhe-one-image.yml` export weights từ checkpoint
+`LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt`, build
+client/server, sinh key mới, mã hóa ảnh `2041_0.png`, suy luận FHE và giải mã.
+Workflow yêu cầu kết quả là `Handgun` và upload báo cáo benchmark; key,
+ciphertext và weights không được upload.
+
+Job chạy trên runner tự quản lý có nhãn `self-hosted`, `linux`, `x64`. Runner cần
+OpenFHE 1.0.4 tại `/usr/local`, Python 3 với `torch` và `numpy`, cùng các công
+cụ được kiểm tra bởi `CICD/run_pipeline.sh` (`cmake`, C++ compiler, `pidstat`,
+`pgrep`, `jq`, `sha256sum`, GNU `time`). Nên có ít nhất 18 GiB RAM available và
+60 GiB dung lượng trống trước khi chạy. Không cần chuẩn bị weights: workflow
+export lại từ checkpoint đã track trong Git.
+
 ## Sinh key
 
 ```bash

@@ -16,7 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 TRAINING_ROOT = PROJECT_ROOT / "training"
 CHECKPOINT = TRAINING_ROOT / "outputs" / "best.pt"
-ORIGINAL_NOTEBOOK = Path("/root/HE/LowMemoryFHEWeaponResNet20_v1/notebooks/Algorithm 2 - Exporting Weights.ipynb")
+ORIGINAL_NOTEBOOK = PROJECT_ROOT / "notebooks" / "Algorithm 2 - Exporting Weights.ipynb"
 
 
 def notebook_code(path: Path) -> str:
@@ -65,10 +65,14 @@ os.chdir(PROJECT_ROOT)
 
 def transformed_export_source() -> str:
     source = notebook_code(ORIGINAL_NOTEBOOK)
+    model_pattern = r'model = torch\.hub\.load\("chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True\)'
+    if len(re.findall(model_pattern, source)) != 1:
+        raise RuntimeError("Expected exactly one reference model load in the exporter notebook")
     source = re.sub(
-        r'model = torch\.hub\.load\("chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True\)',
-        load_weapon_model_source(),
+        model_pattern,
+        lambda _match: load_weapon_model_source(),
         source,
+        count=1,
     )
     for unused_import in (
         "from torchvision import transforms",

@@ -1,0 +1,84 @@
+name: FHE one-image smoke test
+
+on:
+  push:
+    branches:
+      - agent/rebuild-cicd
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fhe-one-image-smoke
+  cancel-in-progress: false
+
+jobs:
+  infer-one-image:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 180
+    env:
+      FHE_EXPERIMENT: "1"
+      FHE_TEST_IMAGE: FHEClient/inputs/2041_0.png
+      FHE_BINARY_WEIGHTS: "1"
+      FHE_PROFILE: "0"
+      CICD_BUILD_JOBS: "2"
+      CICD_WEIGHTS_DIR: ${{ github.workspace }}/LowMemoryFHEWeaponResNet20_v1/weights
+      CICD_REPORT_DIR: ${{ runner.temp }}/fhe-one-image-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout source and selected checkpoint
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Check runner and input files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -c 'import torch, numpy'
+          test -s LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt
+          test -s 'LowMemoryFHEWeaponResNet20_v1/notebooks/Algorithm 2 - Exporting Weights.ipynb'
+          test -s FHEBackend-batch-limit/FHEClient/inputs/2041_0.png
+          test ! -e "$CICD_WEIGHTS_DIR"
+          echo "Checkpoint SHA-256: $(sha256sum LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt | cut -d' ' -f1)"
+
+      - name: Export weights from outputs_fhe_selected/best.pt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$CICD_REPORT_DIR"
+          python3 LowMemoryFHEWeaponResNet20_v1/export_weapon_weights.py \
+            --checkpoint LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt \
+            > "$CICD_REPORT_DIR/export.log" 2>&1 || {
+              tail -n 80 "$CICD_REPORT_DIR/export.log"
+              exit 1
+            }
+          test -s "$CICD_WEIGHTS_DIR/fc.bin"
+          test -s "$CICD_WEIGHTS_DIR/fc_bias.bin"
+          weight_count="$(find "$CICD_WEIGHTS_DIR" -maxdepth 1 -type f -name '*.bin' | wc -l)"
+          echo "Exported weight files: $weight_count"
+          test "$weight_count" -eq 6315
+
+      - name: Build and run encrypted inference on one image
+        working-directory: FHEBackend-batch-limit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          GITHUB_WORKSPACE="$PWD" ./CICD/run_pipeline.sh
+
+      - name: Check decrypted prediction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fxq 'Prediction: Handgun' "$CICD_REPORT_DIR/logs/decryption.log"
+          echo 'Selected checkpoint classified 2041_0.png as Handgun.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload non-sensitive benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fhe-one-image-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.CICD_REPORT_DIR }}
+          if-no-files-found: warn
+          retention-days: 14

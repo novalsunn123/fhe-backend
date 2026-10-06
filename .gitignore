@@ -1,6 +1,7 @@
 # Git/GitHub metadata lồng nhau
 **/.git/
 **/.github/
+!/.github/
 
 # Build và cache
 **/build/
