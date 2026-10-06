@@ -55,6 +55,9 @@ int main(int argc, char* argv[]) {
 
     OperationProfiler& profiler = OperationProfiler::instance();
     profiler.configureFromEnvironment();
+    {
+        ProfileScope command("pipeline", "total_keyload_command");
+    }
     profiler.setContext("Layer test", "Block test");
     profiler.recordDuration("weight_file_read", "read_weight_file", 0.010);
     profiler.recordDuration("weight_text_parse", "parse_weight_text", 0.020);
@@ -81,11 +84,13 @@ int main(int argc, char* argv[]) {
 
     const bool valid =
         contains(json, "\"schema_version\": 3") &&
+        contains(json, "\"total_keyload_command_seconds\": ") &&
         contains(json, "\"convolution_operation_summary\"") &&
         contains(json, "\"rotation_usage_summary\"") &&
         contains(json, "\"rotation_index\": 1") &&
         contains(json, "\"fast_rotation\": {\"count\": 1") &&
         contains(markdown, "## Convolution operation breakdown") &&
+        contains(markdown, "| Total key-load command |") &&
         contains(markdown, "## Application rotation-key audit") &&
         contains(markdown, "| rotations-layer1.bin | rotation | 1 | 1 |") &&
         contains(markdown, "| eval_mult_plain | 1 |") &&

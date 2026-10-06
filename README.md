@@ -93,6 +93,11 @@ Mỗi lần push lên nhánh `agent/rebuild-cicd`, workflow
 client/server, sinh key mới, mã hóa ảnh `2041_0.png`, suy luận FHE và giải mã.
 Workflow yêu cầu kết quả là `Handgun`, bật operation profiler và upload báo cáo benchmark; key,
 ciphertext và weights không được upload.
+Sau khi giải mã, workflow chạy thêm hai lượt `FHEServer profile_keys 1` trên
+cùng bộ evaluation keys. Các báo cáo `keyload-pass1/`, `keyload-pass2/`,
+`key-read-control.csv` và `metrics.csv` giúp so sánh thời gian nạp từng file,
+đọc thô, CPU, RAM và I/O mà không
+chạy lại mạch suy luận; chế độ này không giải mã và không dùng secret key.
 
 Job chạy trên runner tự quản lý có nhãn `self-hosted`, `linux`, `x64`. Workflow
 tự cài Python 3.11, NumPy và PyTorch bản CPU để export checkpoint. Runner cần

@@ -16,6 +16,12 @@ cmake --build . -j2
 
 Return `encrypted-result.bin` to the client. The server does not decrypt it.
 
+To benchmark key deserialization without running the inference circuit, run
+`./FHEServer profile_keys 1` from the same directory with `FHE_PROFILE=1` and
+`FHE_PROFILE_DIR` set to an output directory. It loads and clears the six
+evaluation-key sets in inference order, recording per-file timings. It uses no
+secret key and does not emit key material.
+
 ## Staged multi-image inference
 
 For multiple ciphertexts, `infer_batch` processes the workload layer by layer so

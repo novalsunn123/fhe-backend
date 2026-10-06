@@ -113,6 +113,25 @@ jobs:
           echo "::notice title=FHE operation profile::$profile_summary"
           sed -n '1,22p' "$CICD_REPORT_DIR/fhe-operation-profile.md" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Summarize repeated key-loading benchmark
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Same-key loading comparison' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Pass | Command (s) | Context + keys (s) | Key files |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---:|' >> "$GITHUB_STEP_SUMMARY"
+          for pass in 1 2; do
+            profile="$CICD_REPORT_DIR/keyload-pass${pass}/fhe-operation-profile.json"
+            test -s "$profile"
+            jq -e '.status == "passed" and .duration_summary.total_keyload_command_seconds > 0 and ([.events[] | select(.event_type == "key_load" and (.event_name | startswith("rotation_keys_")))] | length) == 6' "$profile" > /dev/null
+            jq -r --arg pass "$pass" '"| \($pass) | \(.duration_summary.total_keyload_command_seconds) | \(.duration_summary.context_and_key_loading_seconds) | 6 |"' "$profile" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          test "$(wc -l < "$CICD_REPORT_DIR/key-read-control.csv")" -eq 7
+          echo 'CPU, peak RAM, and filesystem-input counters are in metrics.csv. Per-file deserialization times are in keyload-pass1/ and keyload-pass2/; raw-read control times and direct/buffered mode are in key-read-control.csv.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload non-sensitive benchmark report
         if: always()
         uses: actions/upload-artifact@v4

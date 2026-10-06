@@ -299,6 +299,7 @@ void OperationProfiler::writeMarkdown(const std::string& status,
            << "| Metric | Value |\n|---|---|\n"
            << "| Status | " << status << " |\n"
            << "| Total infer command | " << formatDuration(durationForName(events, "total_infer_command")) << " |\n"
+           << "| Total key-load command | " << formatDuration(durationForName(events, "total_keyload_command")) << " |\n"
            << "| Context and key loading | " << formatDuration(totalContextAndKeyLoading(events)) << " |\n"
            << "| FHE circuit | " << formatDuration(durationForName(events, "fhe_circuit")) << " |\n"
            << "| Total bootstrap time | " << formatDuration(bootstrap.count ? std::optional<double>(bootstrap.total) : std::nullopt) << " |\n"
@@ -463,6 +464,9 @@ void OperationProfiler::writeJson(const std::string& status,
            << "    \"total_infer_command_seconds\": ";
     const auto total_infer = durationForName(events, "total_infer_command");
     if (total_infer) output << *total_infer; else output << "null";
+    output << ",\n    \"total_keyload_command_seconds\": ";
+    const auto total_keyload = durationForName(events, "total_keyload_command");
+    if (total_keyload) output << *total_keyload; else output << "null";
     output << ",\n    \"context_and_key_loading_seconds\": ";
     const auto key_loading = totalContextAndKeyLoading(events);
     if (key_loading) output << *key_loading; else output << "null";

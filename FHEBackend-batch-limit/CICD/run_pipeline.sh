@@ -146,7 +146,8 @@ measure_phase() {
     # workload by the resource sampler.
     tail --pid="$timed_pid" -n +1 -f "$phase_log" &
     log_tail_pid=$!
-    if [[ "$phase" == "key_generation" || "$phase" == "inference" ]]; then
+    if [[ "$phase" == "key_generation" || "$phase" == "inference" \
+          || "$phase" == "keyload_pass1" || "$phase" == "keyload_pass2" ]]; then
         start_resource_sampler "$timed_pid" "$sample_log" "$swap_log"
         sampler_pid="$RESOURCE_SAMPLER_PID"
     fi
@@ -657,6 +658,10 @@ if ! measure_phase compile_server \
     cmake --build "$SERVER_ROOT/build" --parallel "$BUILD_JOBS"; then
     exit "$LAST_PHASE_EXIT"
 fi
+if ! measure_phase server_tests \
+    ctest --test-dir "$SERVER_ROOT/build" --output-on-failure; then
+    exit "$LAST_PHASE_EXIT"
+fi
 if ! measure_phase key_generation \
     bash -c 'cd "$1" && ./FHEClient generate_keys "$2"' \
         _ "$CLIENT_ROOT/build" "$EXPERIMENT"; then
@@ -702,6 +707,21 @@ if ! grep -q '^Handgun:' "$LOG_DIR/decryption.log" \
     echo "Decryption output is incomplete or invalid." >&2
     FAILURE_PHASE="decryption_validation"
     exit 1
+fi
+
+for pass in 1 2; do
+    profile_directory="$REPORT_DIR/keyload-pass${pass}"
+    if ! measure_phase "keyload_pass${pass}" \
+        env FHE_PROFILE_DIR="$profile_directory" \
+        bash -c 'cd "$1" && ./FHEServer profile_keys "$2"' \
+            _ "$SERVER_ROOT/build" "$EXPERIMENT"; then
+        exit "$LAST_PHASE_EXIT"
+    fi
+done
+if ! measure_phase raw_key_read_control \
+    bash "$REPO_ROOT/CICD/benchmark_key_read.sh" \
+        "$SERVER_KEYS" "$REPORT_DIR/key-read-control.csv"; then
+    exit "$LAST_PHASE_EXIT"
 fi
 
 OVERALL_STATUS="passed"

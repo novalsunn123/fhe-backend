@@ -18,6 +18,7 @@
 void check_arguments(int argc, char *argv[]);
 void executeResNet20();
 void executeResNet20Batch();
+void profileKeyLoading();
 
 Ctxt initial_layer(const Ctxt& in);
 Ctxt layer1(const Ctxt& in);
@@ -56,6 +57,7 @@ int verbose;
 bool test;
 bool plain;
 bool batch_mode;
+bool key_profile_mode;
 
 /*
  * TODO:
@@ -70,9 +72,13 @@ int main(int argc, char *argv[]) {
     try {
         profiler.configureFromEnvironment();
         {
-            ProfileScope total_profile("pipeline", "total_infer_command", "pipeline", "");
+            ProfileScope total_profile("pipeline",
+                key_profile_mode ? "total_keyload_command" : "total_infer_command",
+                "pipeline", "");
             controller.load_server_context(verbose > 1);
-            if (batch_mode) {
+            if (key_profile_mode) {
+                profileKeyLoading();
+            } else if (batch_mode) {
                 executeResNet20Batch();
             } else {
                 executeResNet20();
@@ -89,6 +95,26 @@ int main(int argc, char *argv[]) {
         cerr << error.what() << endl;
         return 1;
     }
+}
+
+void profileKeyLoading() {
+    controller.load_bootstrapping_and_rotation_keys("rotations-layer1.bin", 16384, false);
+    controller.clear_bootstrapping_and_rotation_keys(16384);
+
+    controller.load_rotation_keys("rotations-layer2-downsample.bin", false);
+    controller.clear_rotation_keys();
+
+    controller.load_bootstrapping_and_rotation_keys("rotations-layer2.bin", 8192, false);
+    controller.clear_bootstrapping_and_rotation_keys(8192);
+
+    controller.load_rotation_keys("rotations-layer3-downsample.bin", false);
+    controller.clear_rotation_keys();
+
+    controller.load_bootstrapping_and_rotation_keys("rotations-layer3.bin", 4096, false);
+    controller.clear_bootstrapping_and_rotation_keys(4096);
+
+    controller.load_rotation_keys("rotations-finallayer.bin", false);
+    controller.clear_rotation_keys();
 }
 
 namespace {
@@ -735,15 +761,20 @@ Ctxt layer1(const Ctxt& in) {
 void check_arguments(int argc, char *argv[]) {
     verbose = 0;
     batch_mode = false;
-    if (argc < 2 || (string(argv[1]) != "infer" && string(argv[1]) != "infer_batch")) {
+    key_profile_mode = false;
+    if (argc < 2 || (string(argv[1]) != "infer" && string(argv[1]) != "infer_batch" &&
+                     string(argv[1]) != "profile_keys")) {
         cerr << "Usage:\n"
              << "  FHEServer infer <experiment> <encrypted-input> <encrypted-output> [verbose]\n"
              << "  FHEServer infer_batch <experiment> <batch-manifest> <checkpoint-dir> "
-                "<metrics-output> [verbose]\n";
+                "<metrics-output> [verbose]\n"
+             << "  FHEServer profile_keys <experiment>\n";
         exit(1);
     }
     batch_mode = string(argv[1]) == "infer_batch";
-    if ((!batch_mode && argc < 5) || (batch_mode && argc < 6)) {
+    key_profile_mode = string(argv[1]) == "profile_keys";
+    if ((key_profile_mode && argc != 3) || (!key_profile_mode && !batch_mode && argc < 5) ||
+        (batch_mode && argc < 6)) {
         cerr << "Missing arguments for " << argv[1] << ". Run FHEServer without arguments for usage.\n";
         exit(1);
     }
@@ -753,7 +784,9 @@ void check_arguments(int argc, char *argv[]) {
         exit(1);
     }
     controller.parameters_folder = "keys_exp" + experiment;
-    if (batch_mode) {
+    if (key_profile_mode) {
+        return;
+    } else if (batch_mode) {
         batch_manifest_filename = argv[3];
         batch_checkpoint_directory = argv[4];
         batch_metrics_filename = argv[5];
