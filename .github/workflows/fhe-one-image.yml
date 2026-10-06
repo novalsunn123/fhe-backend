@@ -36,11 +36,26 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -c 'import torch, numpy'
-          test -s LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt
-          test -s 'LowMemoryFHEWeaponResNet20_v1/notebooks/Algorithm 2 - Exporting Weights.ipynb'
-          test -s FHEBackend-batch-limit/FHEClient/inputs/2041_0.png
-          test ! -e "$CICD_WEIGHTS_DIR"
+          if ! python3 -c 'import torch, numpy'; then
+            echo '::error title=Missing Python dependencies::Runner needs Python 3 with torch and numpy.'
+            exit 1
+          fi
+          if ! test -s LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt; then
+            echo '::error title=Missing checkpoint::Selected best.pt was not checked out.'
+            exit 1
+          fi
+          if ! test -s 'LowMemoryFHEWeaponResNet20_v1/notebooks/Algorithm 2 - Exporting Weights.ipynb'; then
+            echo '::error title=Missing exporter notebook::The weight-export notebook was not checked out.'
+            exit 1
+          fi
+          if ! test -s FHEBackend-batch-limit/FHEClient/inputs/2041_0.png; then
+            echo '::error title=Missing sample image::The test image was not checked out.'
+            exit 1
+          fi
+          if test -e "$CICD_WEIGHTS_DIR"; then
+            echo '::error title=Stale export directory::Weight export directory already exists before the export step.'
+            exit 1
+          fi
           echo "Checkpoint SHA-256: $(sha256sum LowMemoryFHEWeaponResNet20_v1/training/outputs_fhe_selected/best.pt | cut -d' ' -f1)"
 
       - name: Export weights from outputs_fhe_selected/best.pt
