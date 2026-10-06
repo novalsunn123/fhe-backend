@@ -32,6 +32,19 @@ jobs:
           clean: true
           persist-credentials: false
 
+      - name: Set up Python for checkpoint export
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install CPU-only export dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --disable-pip-version-check numpy==1.26.4
+          python3 -m pip install --disable-pip-version-check torch==2.6.0 \
+            --index-url https://download.pytorch.org/whl/cpu
+
       - name: Check runner and input files
         shell: bash
         run: |

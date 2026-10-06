@@ -94,9 +94,10 @@ client/server, sinh key mới, mã hóa ảnh `2041_0.png`, suy luận FHE và g
 Workflow yêu cầu kết quả là `Handgun` và upload báo cáo benchmark; key,
 ciphertext và weights không được upload.
 
-Job chạy trên runner tự quản lý có nhãn `self-hosted`, `linux`, `x64`. Runner cần
-OpenFHE 1.0.4 tại `/usr/local`, Python 3 với `torch` và `numpy`, cùng các công
-cụ được kiểm tra bởi `CICD/run_pipeline.sh` (`cmake`, C++ compiler, `pidstat`,
+Job chạy trên runner tự quản lý có nhãn `self-hosted`, `linux`, `x64`. Workflow
+tự cài Python 3.11, NumPy và PyTorch bản CPU để export checkpoint. Runner cần
+OpenFHE 1.0.4 tại `/usr/local`, cùng các công cụ được kiểm tra bởi
+`CICD/run_pipeline.sh` (`cmake`, C++ compiler, `pidstat`,
 `pgrep`, `jq`, `sha256sum`, GNU `time`). Nên có ít nhất 18 GiB RAM available và
 60 GiB dung lượng trống trước khi chạy. Không cần chuẩn bị weights: workflow
 export lại từ checkpoint đã track trong Git.
