@@ -8,6 +8,17 @@ Agent-authored source changes are submitted on `agent/*` pull requests. CI
 builds and benchmarks each candidate against the latest `dev` baseline, then
 publishes the measured deltas for manual review. CI never merges automatically.
 
+## Batch weight cache
+
+`infer_batch` can retain raw vectors from the packed-weight archive in a
+bounded LRU cache. This avoids re-reading weights for later images in the same
+server process; it does not change the model or encoded values. The cache is
+disabled by default so one-image inference keeps its existing memory profile.
+
+Set `FHE_WEIGHT_CACHE_BYTES` to an integer from `0` to `1073741824` before
+starting `FHEServer`, for example `536870912` for a 512 MiB cache. Use this
+only after measuring batch RSS on the target runner.
+
 ## Lịch sử phiên bản dev
 
 Mỗi phiên bản được người quản lý chấp nhận thủ công sau khi đọc benchmark.

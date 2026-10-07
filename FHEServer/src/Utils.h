@@ -6,6 +6,7 @@
 #define LOWMEMORYFHERESNET20_UTILS_H
 
 #include <cstdlib>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -45,13 +46,29 @@ namespace utils {
         return configured && *configured ? string(configured) : string("packed-weights.bin");
     }
 
+    static inline size_t packed_weight_cache_bytes() {
+        constexpr size_t max_cache_bytes = 1024U * 1024U * 1024U;
+        const char* configured = std::getenv("FHE_WEIGHT_CACHE_BYTES");
+        if (configured == nullptr || *configured == '\0') return 0;
+        const char* end = configured;
+        while (*end != '\0') ++end;
+        unsigned long long value = 0;
+        const auto result = std::from_chars(configured, end, value);
+        if (result.ec != std::errc{} || result.ptr != end ||
+            value > static_cast<unsigned long long>(max_cache_bytes)) {
+            throw runtime_error("FHE_WEIGHT_CACHE_BYTES must be an integer from 0 to 1073741824");
+        }
+        return static_cast<size_t>(value);
+    }
+
     static inline packed_weights::Archive* packed_weight_archive() {
         static once_flag initialized;
         static unique_ptr<packed_weights::Archive> archive;
         static exception_ptr initialization_error;
         call_once(initialized, [] {
             try {
-                archive = std::make_unique<packed_weights::Archive>(packed_weight_path());
+                archive = std::make_unique<packed_weights::Archive>(packed_weight_path(),
+                                                                     packed_weight_cache_bytes());
             } catch (...) {
                 initialization_error = current_exception();
             }
