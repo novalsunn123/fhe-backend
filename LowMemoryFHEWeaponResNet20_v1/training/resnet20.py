@@ -2,12 +2,14 @@
 
 import torch
 from torch import nn
+from typing import Callable, Optional
 
 
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_channels: int, channels: int, stride: int = 1) -> None:
+    def __init__(self, in_channels: int, channels: int, stride: int = 1,
+                 activation_factory: Optional[Callable[[], nn.Module]] = None) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, channels, 3, stride, 1, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
@@ -19,13 +21,14 @@ class BasicBlock(nn.Module):
                 nn.Conv2d(in_channels, channels, 1, stride, bias=False),
                 nn.BatchNorm2d(channels),
             )
+        self.activation = (activation_factory or (lambda: nn.ReLU(inplace=True)))()
 
     def forward(self, x: torch.Tensor, return_preactivations: bool = False):
         residual = self.shortcut(x)
         pre_activation_1 = self.bn1(self.conv1(x))
-        x = torch.relu(pre_activation_1)
+        x = self.activation(pre_activation_1)
         pre_activation_2 = self.bn2(self.conv2(x)) + residual
-        x = torch.relu(pre_activation_2)
+        x = self.activation(pre_activation_2)
         if return_preactivations:
             return x, (pre_activation_1, pre_activation_2)
         return x
@@ -34,13 +37,15 @@ class BasicBlock(nn.Module):
 class ResNet20(nn.Module):
     """CIFAR-style ResNet-20: 3 residual blocks in each of 3 stages."""
 
-    def __init__(self, num_classes: int = 2) -> None:
+    def __init__(self, num_classes: int = 2,
+                 activation_factory: Optional[Callable[[], nn.Module]] = None) -> None:
         super().__init__()
         self.in_channels = 16
+        self.activation_factory = activation_factory or (lambda: nn.ReLU(inplace=True))
         self.stem = nn.Sequential(
             nn.Conv2d(3, 16, 3, 1, 1, bias=False),
             nn.BatchNorm2d(16),
-            nn.ReLU(inplace=True),
+            self.activation_factory(),
         )
         self.layer1 = self._make_layer(16, blocks=3, stride=1)
         self.layer2 = self._make_layer(32, blocks=3, stride=2)
@@ -50,9 +55,10 @@ class ResNet20(nn.Module):
         self._initialize_weights()
 
     def _make_layer(self, channels: int, blocks: int, stride: int) -> nn.Sequential:
-        layers = [BasicBlock(self.in_channels, channels, stride)]
+        layers = [BasicBlock(self.in_channels, channels, stride, self.activation_factory)]
         self.in_channels = channels
-        layers.extend(BasicBlock(channels, channels) for _ in range(blocks - 1))
+        layers.extend(BasicBlock(channels, channels, activation_factory=self.activation_factory)
+                      for _ in range(blocks - 1))
         return nn.Sequential(*layers)
 
     def _initialize_weights(self) -> None:

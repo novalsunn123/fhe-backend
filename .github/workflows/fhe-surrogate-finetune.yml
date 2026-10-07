@@ -1,0 +1,93 @@
+name: FHE surrogate fine-tune sweep
+
+on:
+  push:
+    branches: [agent/fhe-surrogate-sweep]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fhe-surrogate-finetune
+  cancel-in-progress: false
+
+jobs:
+  fine-tune:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - id: light
+            epochs: 12
+            lr: '0.001'
+            bound: '0.70'
+            range_penalty: '10'
+            stem_penalty: '25'
+          - id: balanced
+            epochs: 15
+            lr: '0.001'
+            bound: '0.55'
+            range_penalty: '35'
+            stem_penalty: '120'
+          - id: strict
+            epochs: 15
+            lr: '0.0005'
+            bound: '0.40'
+            range_penalty: '100'
+            stem_penalty: '200'
+          - id: strong-range
+            epochs: 20
+            lr: '0.0005'
+            bound: '0.50'
+            range_penalty: '75'
+            stem_penalty: '160'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          clean: true
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install plaintext training dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check numpy==1.26.4 Pillow tqdm
+          python -m pip install --disable-pip-version-check torch==2.6.0 torchvision==0.21.0 \
+            --index-url https://download.pytorch.org/whl/cpu
+      - name: Fine-tune Chebyshev-surrogate candidate
+        working-directory: LowMemoryFHEWeaponResNet20_v1/training
+        run: |
+          set -Eeuo pipefail
+          test -s outputs_fhe_selected/best.pt
+          python chebyshev_finetune.py \
+            --checkpoint outputs_fhe_selected/best.pt --data-dir data \
+            --output-dir "run-${{ matrix.id }}" --epochs "${{ matrix.epochs }}" \
+            --lr "${{ matrix.lr }}" --activation-bound "${{ matrix.bound }}" \
+            --range-penalty "${{ matrix.range_penalty }}" \
+            --stem-range-penalty "${{ matrix.stem_penalty }}" --degree 59 \
+            | tee "run-${{ matrix.id }}.log"
+          jq -e '.status == "passed" and .best_surrogate_validation.total == 190' "run-${{ matrix.id }}/report.json"
+      - name: Publish candidate summary
+        if: always()
+        working-directory: LowMemoryFHEWeaponResNet20_v1/training
+        run: |
+          if test -s "run-${{ matrix.id }}/report.json"; then
+            echo "## ${{ matrix.id }}" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '"- Surrogate validation: \(.best_surrogate_validation.correct)/\(.best_surrogate_validation.total) (\(.best_surrogate_validation.accuracy * 100)%)\n- Exact-ReLU validation: \(.exact_relu_validation.correct)/\(.exact_relu_validation.total) (\(.exact_relu_validation.accuracy * 100)%)\n- Best epoch: \(.best_surrogate_validation.epoch)"' "run-${{ matrix.id }}/report.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload candidate checkpoint and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chebyshev-finetune-${{ matrix.id }}-${{ github.sha }}
+          path: |
+            LowMemoryFHEWeaponResNet20_v1/training/run-${{ matrix.id }}/best.pt
+            LowMemoryFHEWeaponResNet20_v1/training/run-${{ matrix.id }}/report.json
+            LowMemoryFHEWeaponResNet20_v1/training/run-${{ matrix.id }}.log
+          if-no-files-found: warn
+          retention-days: 30
