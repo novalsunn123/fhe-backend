@@ -62,7 +62,8 @@ std::uint64_t streamOffset(std::ifstream& input) {
 
 }  // namespace
 
-Archive::Archive(const std::filesystem::path& path) : path_(path), stream_(path, std::ios::binary) {
+Archive::Archive(const std::filesystem::path& path, std::size_t cache_capacity_bytes)
+    : path_(path), stream_(path, std::ios::binary), cache_capacity_bytes_(cache_capacity_bytes) {
     if (!stream_) throw std::runtime_error("Cannot open packed weight archive: " + path.string());
 
     std::array<char, kMagic.size()> magic{};
@@ -112,14 +113,69 @@ std::vector<double> Archive::read(const std::string& name) {
         throw std::runtime_error("Packed weight does not fit in memory: " + name);
     }
 
-    std::vector<double> values(static_cast<std::size_t>(found->second.count));
-    std::lock_guard<std::mutex> lock(stream_mutex_);
-    stream_.clear();
-    stream_.seekg(static_cast<std::streamoff>(found->second.offset));
-    stream_.read(reinterpret_cast<char*>(values.data()),
-                 static_cast<std::streamsize>(values.size() * sizeof(double)));
-    if (!stream_) throw std::runtime_error("Cannot read packed weight: " + name);
-    return values;
+    if (cache_capacity_bytes_ == 0) {
+        std::vector<double> values(static_cast<std::size_t>(found->second.count));
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        stream_.clear();
+        stream_.seekg(static_cast<std::streamoff>(found->second.offset));
+        stream_.read(reinterpret_cast<char*>(values.data()),
+                     static_cast<std::streamsize>(values.size() * sizeof(double)));
+        if (!stream_) throw std::runtime_error("Cannot read packed weight: " + name);
+        return values;
+    }
+
+    if (const auto cached = findCached(name)) return *cached;
+
+    auto values = std::make_shared<std::vector<double>>(static_cast<std::size_t>(found->second.count));
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        stream_.clear();
+        stream_.seekg(static_cast<std::streamoff>(found->second.offset));
+        stream_.read(reinterpret_cast<char*>(values->data()),
+                     static_cast<std::streamsize>(values->size() * sizeof(double)));
+        if (!stream_) throw std::runtime_error("Cannot read packed weight: " + name);
+    }
+    cache(name, values);
+    return *values;
+}
+
+std::shared_ptr<const std::vector<double>> Archive::findCached(const std::string& name) {
+    if (cache_capacity_bytes_ == 0) return nullptr;
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    const auto found = cache_.find(name);
+    if (found == cache_.end()) {
+        ++cache_stats_.misses;
+        return nullptr;
+    }
+    recency_.splice(recency_.begin(), recency_, found->second.recency);
+    ++cache_stats_.hits;
+    return found->second.values;
+}
+
+void Archive::cache(const std::string& name,
+                    const std::shared_ptr<const std::vector<double>>& values) {
+    if (cache_capacity_bytes_ == 0) return;
+    const std::size_t bytes = values->size() * sizeof(double);
+    if (bytes > cache_capacity_bytes_) return;
+
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    if (cache_.find(name) != cache_.end()) return;
+    while (!recency_.empty() && cache_stats_.bytes + bytes > cache_capacity_bytes_) {
+        const std::string& evicted_name = recency_.back();
+        const auto evicted = cache_.find(evicted_name);
+        cache_stats_.bytes -= evicted->second.bytes;
+        cache_.erase(evicted);
+        recency_.pop_back();
+        ++cache_stats_.evictions;
+    }
+    recency_.push_front(name);
+    cache_.emplace(name, CachedEntry{values, bytes, recency_.begin()});
+    cache_stats_.bytes += bytes;
+}
+
+CacheStats Archive::cacheStats() const {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    return cache_stats_;
 }
 
 void packDirectory(const std::filesystem::path& input_directory,
