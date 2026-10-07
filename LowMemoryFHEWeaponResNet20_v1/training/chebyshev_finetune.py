@@ -25,6 +25,32 @@ MEAN = (0.5, 0.5, 0.5)
 STD = (0.5, 0.5, 0.5)
 
 
+class ChebyshevPolynomial(torch.autograd.Function):
+    """Evaluate a Chebyshev series without retaining every recurrence step."""
+    @staticmethod
+    def forward(ctx, values: torch.Tensor, coefficients: torch.Tensor) -> torch.Tensor:
+        ctx.save_for_backward(values, coefficients)
+        result = coefficients[0] + coefficients[1] * values
+        previous, current = torch.ones_like(values), values
+        for coefficient in coefficients[2:]:
+            following = 2.0 * values * current - previous
+            result = result + coefficient * following
+            previous, current = current, following
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        values, coefficients = ctx.saved_tensors
+        # dT_k/dx = k U_(k-1); recompute the second-kind recurrence instead
+        # of retaining the 59 first-kind tensors from the forward pass.
+        derivative = coefficients[1] * torch.ones_like(values)
+        previous, current = torch.ones_like(values), 2.0 * values  # U_0, U_1
+        for degree in range(2, coefficients.numel()):
+            derivative = derivative + coefficients[degree] * degree * current
+            previous, current = current, 2.0 * values * current - previous
+        return grad_output * derivative, None
+
+
 class ChebyshevRelu(nn.Module):
     def __init__(self, degree: int) -> None:
         super().__init__()
@@ -41,13 +67,7 @@ class ChebyshevRelu(nn.Module):
         # OpenFHE still evaluates the unclamped ciphertext, hence range metrics
         # remain a release gate rather than being hidden by this surrogate.
         bounded = values + (values.clamp(-1.0, 1.0) - values).detach()
-        result = self.coefficients[0] + self.coefficients[1] * bounded
-        previous, current = torch.ones_like(bounded), bounded
-        for coefficient in self.coefficients[2:]:
-            following = 2.0 * bounded * current - previous
-            result = result + coefficient * following
-            previous, current = current, following
-        return result
+        return ChebyshevPolynomial.apply(bounded, self.coefficients)
 
 
 def parse_args() -> argparse.Namespace:
