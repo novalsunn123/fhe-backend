@@ -32,10 +32,19 @@ int main(int argc, char* argv[]) {
     packed_weights::packDirectory(root / "weights", archive_path);
     packed_weights::verifyDirectory(root / "weights", archive_path);
     packed_weights::Archive archive(archive_path);
+    packed_weights::Archive cached_archive(archive_path, 24);
     const bool valid = archive.entryCount() == 2 &&
         archive.contains("first.bin") && archive.contains("second.bin") &&
         equal(archive.read("first.bin"), {1.25, -2.5, 3.125}) &&
-        equal(archive.read("second.bin"), {4.5, 5.75, 6.0});
+        equal(archive.read("second.bin"), {4.5, 5.75, 6.0}) &&
+        equal(cached_archive.read("first.bin"), {1.25, -2.5, 3.125}) &&
+        equal(cached_archive.read("first.bin"), {1.25, -2.5, 3.125}) &&
+        equal(cached_archive.read("second.bin"), {4.5, 5.75, 6.0}) &&
+        equal(cached_archive.read("first.bin"), {1.25, -2.5, 3.125}) &&
+        cached_archive.cacheStats().hits == 1 &&
+        cached_archive.cacheStats().misses == 3 &&
+        cached_archive.cacheStats().evictions == 2 &&
+        cached_archive.cacheStats().bytes == 24;
     std::filesystem::remove_all(root);
     if (!valid) std::cerr << "Packed weight round-trip differs from text input\n";
     return valid ? 0 : 1;
